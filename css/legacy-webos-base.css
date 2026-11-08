@@ -47,6 +47,8 @@ html.q-no-flex-gap .live-preview-program > * + * { margin-left: 18px; }
 html.q-no-flex-gap .live-preview-legend > * + * { margin-left: 8px; }
 html.q-no-flex-gap .live-preview-hint > * + * { margin-left: 8px; }
 html.q-no-flex-gap .osd-channel > * + * { margin-left: 16px; }
+html.q-no-flex-gap .osd-shortcuts > * + * { margin-left: 8px; }
+html.q-no-flex-gap .osd-shortcut > * + * { margin-left: 8px; }
 html.q-no-flex-gap .osd-stream-info > * + * { margin-left: 8px; }
 html.q-no-flex-gap .osd-programme-detail > * + * { margin-left: 16px; }
 html.q-no-flex-gap .osd-programme-time > * + * { margin-left: 16px; }

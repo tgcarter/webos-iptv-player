@@ -97,6 +97,18 @@ describe('PlayerMenu', () => {
     expect(items()[0].classList.contains('focused')).toBe(true);
   });
 
+  it('adds late subtitle tracks without moving focus in the direct popup', () => {
+    subtitleSearchAvailable.mockReturnValue(true);
+    menu.show('subtitles');
+    expect(el.querySelector('.focused')?.getAttribute('data-key')).toBe('sub:-1');
+
+    subtitleTracks = [{ index: 3, label: 'Track 1', active: false, available: true }];
+    menu.refresh();
+
+    expect(el.textContent).toContain('Track 1');
+    expect(el.querySelector('.focused')?.getAttribute('data-key')).toBe('sub:-1');
+  });
+
   it('show() always resets focus to the first item', () => {
     menu.show();
     menu.handleAction('down');
@@ -264,6 +276,19 @@ describe('PlayerMenu', () => {
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
       expect(onAction).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('finishes a pending close when the playback bar is torn down', () => {
+    menu.show();
+    menu.hide();
+    expect(el.classList.contains('hidden')).toBe(false);
+
+    menu.hide(true);
+    expect(el.classList.contains('hidden')).toBe(true);
+
+    menu.show();
+    el.dispatchEvent(new Event('transitionend'));
+    expect(el.classList.contains('hidden')).toBe(false);
   });
 
   describe('hide transition', () => {

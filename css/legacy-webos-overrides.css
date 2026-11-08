@@ -37,6 +37,12 @@ html.q-no-flex-gap .epg-prog-title > .epg-bell-glyph { margin-left: 18px; }
 html.q-no-flex-gap .settings-field > .settings-item-hint { margin-top: 14px; }
 html.q-no-flex-gap .live-preview-favorite { margin-right: 20px; }
 
+/* Keep the playback shortcuts right-aligned when gap is emulated by margins. */
+html.q-no-flex-gap .osd-channel > .osd-shortcuts {
+  margin-left: auto;
+  padding-left: 16px;
+}
+
 /*
  * The quirk class makes each generated margin more specific than the
  * component rule that pushes a child to the end with `margin-left: auto`.

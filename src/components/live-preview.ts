@@ -53,6 +53,7 @@ type PreviewControl = 'favorite' | 'mute' | 'fullscreen';
 export class LivePreview {
   private state: LivePlaybackSnapshot | null = null;
   private control: PreviewControl | null = null;
+  private guideFrame: number | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly presentation: PlayerPresentation;
   private channelSet: Channel[] | null = null;
@@ -231,19 +232,24 @@ export class LivePreview {
 
   refreshLayout(): void {
     this.presentation.refresh();
-    if (this.state) this.fitPrograms();
+    this.fitPrograms();
   }
 
   private applyState(state: LivePlaybackSnapshot | null): void {
     this.state = state;
-    if (!state) {
-      this.control = null;
-      hide(this.container);
-      this.stopRefreshTimer();
-      return;
-    }
-    show(this.container);
+    if (!state) this.control = null;
     this.render();
+  }
+
+  queueGuideRefresh(): void {
+    if (this.guideFrame !== null) return;
+    this.guideFrame = requestAnimationFrame(() => {
+      this.guideFrame = null;
+      if (this.options.getCurrentView() === 'channels') this.render();
+    });
+  }
+
+  private startRefreshTimer(): void {
     if (this.timer === null && !document.hidden) {
       this.timer = setTimeout(() => {
         this.timer = null;
@@ -388,9 +394,19 @@ export class LivePreview {
 
   private render(): void {
     const state = this.state;
-    if (!state) return;
+    const guideChannel = this.options.getCurrentView() === 'channels'
+      ? this.options.channelList.getGuideChannel(state?.channel)
+      : null;
+    this.options.channelView.classList.toggle('has-live-guide', !!guideChannel);
+    if (!guideChannel) {
+      hide(this.container);
+      this.stopRefreshTimer();
+      return;
+    }
+    show(this.container);
+    this.startRefreshTimer();
     const now = new Date();
-    const epgId = EpgService.findChannelId(state.channel);
+    const epgId = EpgService.findChannelId(guideChannel);
     const program = epgId ? EpgService.getNowPlaying(epgId) : null;
     const upcoming = epgId
       ? EpgService.getUpcoming(epgId, CONFIG.PLAYER.LIVE_PREVIEW_UPCOMING_COUNT)
@@ -401,22 +417,23 @@ export class LivePreview {
       ? Math.max(0, Math.min(1, (now.getTime() - program.start.getTime()) / length)) : 0;
     const remaining = program
       ? Math.max(0, Math.ceil((program.stop.getTime() - now.getTime()) / 60000)) : 0;
-    const favorite = this.options.isFavorite(state.channel);
-    const muteLabel = t(state.muted ? 'preview.unmute' : 'preview.mute');
-    const message = state.status === 'loading' ? t('common.loading')
-      : state.status === 'buffering' ? t('preview.connecting')
-      : state.status === 'error' ? t('player.streamError') : '';
+    const favorite = state ? this.options.isFavorite(state.channel) : false;
+    const muteLabel = t(state?.muted ? 'preview.unmute' : 'preview.mute');
+    const message = state?.status === 'loading' ? t('common.loading')
+      : state?.status === 'buffering' ? t('preview.connecting')
+      : state?.status === 'error' ? t('player.streamError') : '';
+    const differentChannel = state && channelKey(state.channel) !== channelKey(guideChannel);
     morph(this.container, html`
       <div class="live-preview-heading" data-key="preview-heading">
-        <span class="live-preview-channel">${state.channel.name}</span>
-        <button class="live-preview-favorite ${this.control === 'favorite' ? 'focused' : ''}"
+        <span class="live-preview-channel">${state?.channel.name ?? guideChannel.name}</span>
+        ${state ? html`<button class="live-preview-favorite ${this.control === 'favorite' ? 'focused' : ''}"
                 data-key="preview-favorite" data-focusable data-preview-action="favorite"
                 aria-label="${t('player.toggleFavorite')}" aria-pressed="${String(favorite)}">
           ${raw(favoriteIcon(favorite))}
-        </button>
+        </button>` : ''}
         <time class="live-preview-clock" datetime="${formatTime(now)}">${formatTime(now)}</time>
       </div>
-      <div class="live-preview-slot" data-key="preview-slot" aria-label="${t('preview.fullScreen')}">
+      ${state ? html`<div class="live-preview-slot" data-key="preview-slot" aria-label="${t('preview.fullScreen')}">
         ${liveBadge('live-preview-badge')}
         ${message ? html`
           <div class="live-preview-message"
@@ -440,8 +457,9 @@ export class LivePreview {
               this.control === 'mute' ? muteLabel : t('preview.fullScreen')
             }</span></span>
           </div>` : ''}
-      </div>
+      </div>` : ''}
       <div class="live-preview-details" data-key="preview-details">
+        ${differentChannel ? html`<p class="live-preview-guide-channel">${guideChannel.name}</p>` : ''}
         ${program ? html`<h2 class="live-preview-title">${program.title}</h2>` : ''}
         ${program && length > 0 ? html`
           <div class="live-preview-schedule">
@@ -456,7 +474,7 @@ export class LivePreview {
           <div class="live-preview-upcoming">
             <h3>${t('player.upNext')}</h3>
             ${this.renderUpcoming(upcoming, now)}
-          </div>` : program ? html`<p class="live-preview-empty">${t('preview.noUpcoming')}</p>` : ''}
+          </div>` : html`<p class="live-preview-empty">${t(program ? 'preview.noUpcoming' : 'epg.noData')}</p>`}
       </div>
     `);
     this.fitPrograms();

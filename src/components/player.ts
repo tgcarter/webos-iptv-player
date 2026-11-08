@@ -43,6 +43,7 @@ import {
 } from '../services/playback-rate';
 import {
   PlayerOsd,
+  type PlaybackMenuSection,
   type PlayerOsdSnapshot,
   type PlayerOsdStreamInfo,
 } from './player-osd';
@@ -101,7 +102,7 @@ export class Player {
   private resyncing = false;
   private resyncTimer: ReturnType<typeof setTimeout> | null = null;
   private manifestVariants: StreamVariant[] = []; // HLS master variants for best-effort codec readout
-  private vodInfo: MediaInfo | null = null; // container-header stream info for the active VOD (codec/fps/HDR)
+  private vodInfo: MediaInfo | null = null; // container-header stream info for the active VOD
   private stallWatchdog: StallWatchdog;
   private startupWatchdog: StartupWatchdog;
   private startupPending = false;
@@ -136,6 +137,7 @@ export class Player {
       action();
       return true;
     },
+    onPlaybackMenu: (section: PlaybackMenuSection | null) => void = () => {},
   ) {
     this.container = container;
     this.onBack = onBack;
@@ -153,7 +155,7 @@ export class Player {
       },
       onSubtitleTracksUpdated: () => {
         this.tracks.applyHlsSubtitleSelection();
-        if (this.osd.isVisible()) this.osd.render();
+        this.refreshSubtitleInfo();
       },
       onManifest: manifest => this.applyPipelineManifest(manifest),
     });
@@ -177,6 +179,8 @@ export class Player {
       onResync: () => this.resyncAV(),
       onPlayNext: () => this.playNextItem(),
       onCancelNext: () => this.cancelNextItem(),
+      canSearchSubtitles: () => this.subtitleSearchAvailable(),
+      onMenu: onPlaybackMenu,
     });
     this.stallWatchdog = new StallWatchdog({
       probe: (): StallProbe => {
@@ -309,7 +313,9 @@ export class Player {
       if (el === this.videoEl) this.tracks.applyNativeAudioSelection();
     });
     el.textTracks?.addEventListener?.('addtrack', () => {
-      if (el === this.videoEl) this.tracks.applyNativeSubtitleSelection();
+      if (el !== this.videoEl) return;
+      this.tracks.applyNativeSubtitleSelection();
+      this.refreshSubtitleInfo();
     });
     onCurrent('playing', () => {
       this.startupPending = false;
@@ -595,6 +601,7 @@ export class Player {
     scope?: ChannelScope | null,
   ): void {
     if (!this.videoEl) return;
+    this.osd.closeMenu();
     this.playbackRate.reset();
     if (this.liveSessionActive) this.rememberLiveAudio();
     this.playbackActive = true;
@@ -671,16 +678,15 @@ export class Player {
     this.currentScope = null;
     this.catchupInfo = null;
     this.vod = v;
+    this.vodInfo = null;
     this.pendingResumeSecs = v.resumeSecs > 0 ? v.resumeSecs : 0;
     this.pendingSeekTarget = null;
     this.osd.clearFailedIcons();
     this.videoEl.classList.add('active');
     this.loadStream(v.url, null, { direct: true });
     this.tracks.attachVod(v);
-    // Read codec/fps/HDR from the container header — the video element can't
-    // expose them on webOS. Fires once, off the playback path; re-renders the OSD
-    // when it resolves. Guarded so a stale probe can't clobber a newer VOD.
-    this.vodInfo = null;
+    // Read the encoded size, codec, fps and HDR from the file header. The
+    // probe runs off the playback path and can only update this VOD session.
     void probeMedia(v.url, `${v.accountId}|media_probe|${v.kind}|${v.itemId}`).then((info) => {
       if (this.vod !== v || !info) return;
       this.vodInfo = info;
@@ -1000,6 +1006,12 @@ export class Player {
   private applyPipelineManifest(manifest: PipelineManifest): void {
     this.manifestVariants = manifest.variants;
     this.tracks.applyManifest(manifest);
+    this.refreshSubtitleInfo();
+  }
+
+  private refreshSubtitleInfo(): void {
+    if (this.osd.isVisible()) this.osd.render();
+    this.onPlaybackStateChanged();
   }
 
   private onError(reason?: 'unsupported'): void {
@@ -1115,6 +1127,18 @@ export class Player {
   showOSD(): void {
     if (this.livePreviewMode) return;
     this.osd.show();
+  }
+
+  onPlaybackMenuVisibility(visible: boolean): void {
+    this.osd.setMenuVisible(visible);
+  }
+
+  handleOsdShortcuts(action: Action): boolean {
+    if (action === 'yellow' && this.osd.isVisible()) this.osd.render();
+    if (this.vod && action === 'down' && !this.osd.isVisible() && this.canAutoRevealOsd()) {
+      this.showOSD();
+    }
+    return this.osd.handleShortcuts(action, this.isVod());
   }
 
   getVideoElement(): HTMLVideoElement | null { return this.videoEl; }
@@ -1353,13 +1377,15 @@ export class Player {
     this.stopDvrPauseTick();
   }
 
-  // Resolution comes from the video element; other fields use the active MSE
-  // rendition, native manifest metadata or the VOD container probe.
+  // Use the encoded size of a probed file. For adaptive streams, the
+  // video element tracks the playing rendition as its size changes.
   private streamInfo(): PlayerOsdStreamInfo | null {
     const v = this.videoEl;
     const lvl = this.pipeline.streamInfo();
     const info = this.vod ? this.vodInfo : null; // container-header readout for VOD; null on the Live path
-    const badge = resolutionBadge((v ? v.videoHeight : 0) || info?.height || 0);
+    const badge = info?.width && info.height
+      ? resolutionBadge(info.width, info.height)
+      : resolutionBadge(v?.videoWidth ?? 0, v?.videoHeight || info?.height || 0);
     const variant = !this.pipeline.isMseActive() && v
       ? pickVariant(this.manifestVariants, v.videoWidth, v.videoHeight)
       : null;
@@ -1537,6 +1563,7 @@ export class Player {
 
   selectSubtitleTrack(index: number): void {
     this.tracks.selectSubtitleTrack(index);
+    if (this.osd.isVisible()) this.osd.render();
   }
 
   getPlaybackRateState(): PlaybackRateState {

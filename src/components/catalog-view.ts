@@ -60,6 +60,10 @@ const CATALOG_GRID_POSTER_WIDTH = 220;
 const CATALOG_GRID_ROW_STRIDE = 395;
 const CATALOG_GRID_OVERSCAN_ROWS = 2;
 const CATALOG_GRID_VIEWPORT_WIDTH = 1760;
+const CATALOG_GRID_WITH_SIDEBAR_WIDTH = 1432;
+const FILTER_ROW_HEIGHT = 62;
+const FILTER_VIEWPORT_HEIGHT = 648;
+const FILTER_KEY_PREFIX = 'filter:category:';
 const CATALOG_GRID_VIEWPORT_HEIGHT = 900;
 const CATEGORY_RAIL_STRIDE = 320;
 const CATEGORY_RAIL_VIEWPORT = 1760;
@@ -143,7 +147,8 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   private sort: CatalogSortPreference = { by: 'default', direction: 'asc' };
   private resetBrowseRailOffsets = false;
   private browseSortReturn: string | null = null;
-  protected gridCategory: C | null = null;
+  private gridCategory: { id: string; name: string } | null = null;
+  private gridLoading = false;
   private collection: CollectionKind | null = null;
   private managing = false;
   private readonly clearPrompt: ConfirmationPrompt;
@@ -159,6 +164,12 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     fallbackViewportHeight: CATALOG_GRID_VIEWPORT_HEIGHT,
   });
   private gridScrollFrame: number | null = null;
+  private readonly filterVirtualizer = new VirtualList({
+    itemSize: FILTER_ROW_HEIGHT,
+    overscan: 4,
+    fallbackViewportSize: FILTER_VIEWPORT_HEIGHT,
+  });
+  private filterScrollFrame: number | null = null;
   private readonly categoryVirtualizer = new VirtualList({
     itemSize: CATEGORY_RAIL_STRIDE,
     overscan: 4,
@@ -174,6 +185,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   private browseReturn: BrowseReturn | null = null;
   private gridRequest = 0;
   private browseStale = false;
+  private concealmentStale = false;
   readonly focusScope: FocusScope;
   // How the element SpatialNav is picking was asked for; null only follows it.
   private pickVia: Via | null = null;
@@ -213,7 +225,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     });
     this.container.addEventListener('click', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('.catalog-sort, [data-collection-manage], [data-collection-see-all], [data-collection-action]')) return;
+      if (!target.closest('.catalog-sort, [data-collection-manage], [data-collection-see-all], [data-collection-action], .catalog-sidebar')) return;
       const el = target.closest<HTMLElement>('[data-focusable]');
       if (!el || !this.layers[this.mode].contains(el)) return;
       this.place(el, 'pointer');
@@ -230,6 +242,19 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     this.container.addEventListener('scroll', (event: Event) => {
       const target = event.target as HTMLElement;
       if (this.handleExtraScroll(target)) return;
+      if (this.mode === 'grid' && target.classList.contains('catalog-filter-list')) {
+        const offset = this.scrollGuard.readUserOffset(target, 'vertical');
+        if (offset === null || this.filterScrollFrame !== null) return;
+        this.filterScrollFrame = requestAnimationFrame(() => {
+          this.filterScrollFrame = null;
+          if (this.mode !== 'grid' || !this.layers.grid.contains(target)) return;
+          const latest = this.scrollGuard.readUserOffset(target, 'vertical');
+          if (latest === null) return;
+          this.filterVirtualizer.setScrollOffset(latest);
+          this.renderGrid(false, true);
+        });
+        return;
+      }
       if (this.mode === 'browse' && target.classList.contains('catalog-category-rail')) {
         const offset = this.scrollGuard.readUserOffset(target, 'horizontal');
         if (offset === null) return;
@@ -378,7 +403,9 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   private hasKey(key: string): boolean {
     const parsed = parseKey(key);
     if (!parsed || parsed.mode !== this.mode) return false;
-    if (parsed.mode === 'grid') return this.gridIndexOf(parsed.key) >= 0;
+    if (parsed.mode === 'grid') {
+      return this.filterIndexOf(parsed.key) >= 0 || this.gridIndexOf(parsed.key) >= 0;
+    }
     if (parsed.mode === 'browse') {
       return parsed.rail === 'all-categories' && this.categoryIndexOf(parsed.key) >= 0;
     }
@@ -386,6 +413,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   }
 
   private gridIndexOf(key: string): number {
+    if (!this.collection && !key.startsWith('i:')) return -1;
     const source = this.gridSource();
     for (let index = 0; index < source.count; index++) {
       if (source.keyAt(index) === key) return index;
@@ -433,8 +461,12 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     const instant = this.lastRevealInstant;
     let scrolled = false;
     // The grid's window owns its scroll offset; it alone brings a cell in.
-    if (parsed.mode === 'grid' && this.gridIndexOf(parsed.key) >= 0) {
-      return this.revealGridIndex(this.gridIndexOf(parsed.key)) ? true : null;
+    if (parsed.mode === 'grid') {
+      const filter = this.filterIndexOf(parsed.key);
+      if (filter >= 0) return this.revealFilter(filter) ? true : null;
+      const cell = this.resolveKey(key)?.closest<HTMLElement>('[data-grid-index]');
+      const index = cell ? Number(cell.dataset.gridIndex) : this.gridIndexOf(parsed.key);
+      if (index >= 0) return this.revealGridIndex(index) ? true : null;
     }
     if (parsed.mode === 'browse' && parsed.rail === 'all-categories') {
       scrolled = this.revealCategoryIndex(this.categoryIndexOf(parsed.key));
@@ -458,7 +490,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     const track = this.layers.grid.querySelector<HTMLElement>('.catalog-grid-track');
     if (!this.gridVirtualizer.ensureVisible(
       index,
-      track?.clientWidth || CATALOG_GRID_VIEWPORT_WIDTH,
+      track?.clientWidth || this.gridViewportWidth(),
       view?.clientHeight || CATALOG_GRID_VIEWPORT_HEIGHT,
     )) return false;
     this.renderGrid(false);
@@ -669,6 +701,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     this.deepLinkBack = null;
     this.browseReturn = null;
     this.browseStale = false;
+    this.concealmentStale = false;
     this.clearLayer('grid');
     this.clearLayer('detail');
     this.categories = [];
@@ -679,8 +712,10 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     this.browseSortReturn = null;
     this.resetBrowseRailOffsets = false;
     this.gridCategory = null;
+    this.gridLoading = false;
     this.categoryVirtualizer.setScrollOffset(0);
     this.gridVirtualizer.setScrollOffset(0);
+    this.filterVirtualizer.setScrollOffset(0);
     this.resume = this.visibleResume(account.id);
     this.clearLayer('browse');
     this.renderLoading('browse');
@@ -692,6 +727,12 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         accountId: account.id,
         categoryId: category.id,
       }));
+      if (!(await this.openGrid(''))) return;
+      this.gridCategory = null;
+      this.clearLayer('grid');
+      this.renderLoading('browse');
+      // A provider that cannot serve the whole catalog can still expose
+      // individual categories and saved titles.
       const railCats = this.categories.slice(0, CONFIG.XTREAM.RAIL_CATEGORIES);
       // Settle each rail on its own: one failing category must not blank the rest.
       const loaded = await Promise.all(
@@ -767,11 +808,14 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   // A detail the deep link replaced is not restored: Back skips to its grid or
   // browse.
   private restoreBeneathDeepLink(): void {
-    if ((this.gridCategory || this.collection) && this.layers.grid.querySelector('.catalog-grid')) {
+    if (!this.gridLoading && (this.gridCategory || this.collection)
+        && this.layers.grid.querySelector('.catalog-grid')) {
       this.renderGrid();
       return;
     }
+    const interruptedGrid = this.gridLoading;
     this.gridCategory = null;
+    this.gridLoading = false;
     this.clearLayer('grid');
     if (this.layers.browse.querySelector('.catalog-browse')) {
       this.renderBrowse();
@@ -779,7 +823,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     }
     // The deep link aborted a browse load (or switched accounts). Reload it
     // only if the section is shown again (ensureLoaded), not behind Search.
-    this.browseStale = !!this.layers.browse.querySelector('.catalog-loading');
+    this.browseStale = interruptedGrid || !!this.layers.browse.querySelector('.catalog-loading');
     this.showLayer('browse');
     // Nothing to land on until browse loads; the detail's key is gone.
     if (parseKey(this.focusScope.focusKey)?.mode !== 'browse') this.focusScope.track(null);
@@ -789,13 +833,13 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   // an interrupted browse, or one left on an account no longer active.
   ensureLoaded(account: PlaylistEntry | null): void {
     if (!account) return;
-    if (!this.browseStale && this.account?.id === account.id) return;
+    if (!this.browseStale && !this.concealmentStale && this.account?.id === account.id) return;
     log.debug(
       'Catalog browse reloading',
       'event=xtream.view.reload',
       'operation=browse',
       `mode=${this.parentalKind}`,
-      `reason=${this.browseStale ? 'stale' : 'account'}`,
+      `reason=${this.browseStale || this.concealmentStale ? 'stale' : 'account'}`,
     );
     void this.open(account);
   }
@@ -812,6 +856,13 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   }
 
   handleAction(action: Action): void {
+    const key = this.focusScope.focusKey;
+    const pending = key && parseKey(key);
+    if (isFocusMove(action) && this.mode === 'grid' && pending && pending.mode === 'grid'
+        && this.filterIndexOf(pending.key) >= 0 && !this.current()) {
+      this.request(key, 'key');
+      return;
+    }
     this.syncNav();
     if ((isFocusMove(action) || (action === 'select' && this.openSortMenu())) && this.ringHidden()) {
       this.request(this.focusScope.focusKey, 'key');
@@ -859,16 +910,51 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       }
     }
     if (this.moveExtraFocus(action)) return;
+    if (this.mode === 'grid' && isFocusMove(action) && current?.closest('.catalog-sidebar')) {
+      if (action === 'right') {
+        if (this.gridSource().count) this.revealGridIndex(this.gridFocusIndex);
+        const grid = this.layers.grid;
+        const target = grid.querySelector<HTMLElement>(
+          `[data-grid-index="${this.gridFocusIndex}"] [data-focusable]`,
+        ) ?? grid.querySelector<HTMLElement>('.catalog-grid [data-focusable]');
+        if (target) this.place(target, 'key');
+      } else if (action === 'up' || action === 'down') {
+        if (this.moveFilterFocus(current, action)) return;
+        const sidebar = current.closest<HTMLElement>('.catalog-sidebar');
+        this.nav.setRestrict(sidebar);
+        const moved = this.nav.move(action);
+        this.nav.setRestrict(this.layers.grid);
+        if (!moved && action === 'up') this.handlers.onRevealTabBar();
+      }
+      return;
+    }
     if (this.mode === 'browse' && (action === 'left' || action === 'right')
         && this.moveCategoryFocus(action)) return;
     if (this.mode === 'grid'
         && (action === 'up' || action === 'down' || action === 'left' || action === 'right')) {
-      if (this.current()?.closest('.catalog-sort, .catalog-collection-actions')) {
-        if (!this.nav.move(action) && action === 'up') this.handlers.onRevealTabBar();
+      if (sortRow) {
+        if (action === 'up' && this.hasCatalogSidebar()) this.handlers.onRevealTabBar();
+        else if (!this.nav.move(action) && action === 'up') this.handlers.onRevealTabBar();
         return;
       }
       if (this.moveGridFocus(action)) return;
-      if (action === 'up' && !this.nav.move('up')) this.handlers.onRevealTabBar();
+      if (action === 'left') {
+        const category = this.gridCategory?.id;
+        if (category && !this.collection) this.revealFilter(this.categories.findIndex(item => item.id === category));
+        const active = this.layers.grid.querySelector<HTMLElement>('.catalog-sidebar [aria-current="true"]');
+        if (active) this.place(active, 'key');
+      }
+      if (action === 'up') {
+        if (this.hasCatalogSidebar()) {
+          const control = this.layers.grid.querySelector<HTMLElement>(
+            '.catalog-sort .dropdown-trigger, .catalog-collection-actions [data-focusable]',
+          );
+          if (control) this.place(control, 'key');
+          else this.handlers.onRevealTabBar();
+        } else if (!this.nav.move('up')) {
+          this.handlers.onRevealTabBar();
+        }
+      }
       return;
     }
     switch (action) {
@@ -927,11 +1013,22 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         this.setManaging(false);
         return;
       }
-      this.gridCategory = null;
-      this.collection = null;
-      this.renderBrowse();
-      this.clearLayer('grid');
-      return;
+      if (this.collection) {
+        this.leaveCollection();
+        return;
+      }
+      if (this.gridCategory?.id) {
+        if (this.layers.browse.querySelector('.catalog-browse')) {
+          this.gridRequest++;
+          this.gridCategory = null;
+          this.renderBrowse();
+          this.clearLayer('grid');
+        } else {
+          void this.openGrid('');
+        }
+        return;
+      }
+      this.gridRequest++;
     }
     this.handlers.onBack();
   }
@@ -982,14 +1079,16 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     const seeAll = el.dataset.collectionSeeAll;
     const kind = manage ?? seeAll;
     if (kind === 'continue' || kind === 'watchlist') {
-      this.gridCategory = null;
+      const sidebarKey = el.closest('.catalog-sidebar') ? this.keyFor(el) : null;
       this.collection = kind;
       this.managing = manage !== undefined;
       this.gridRequest++;
-      this.clearLayer('grid');
+      this.gridLoading = false;
       this.gridFocusIndex = 0;
       this.gridVirtualizer.setScrollOffset(0);
-      this.renderGrid();
+      this.renderGrid(false);
+      this.place((sidebarKey ? this.resolveKey(sidebarKey) : null)
+        ?? this.layers.grid.querySelector<HTMLElement>('.catalog-grid [data-focusable]'), this.placementVia());
       return true;
     }
     const action = el.dataset.collectionAction;
@@ -1047,8 +1146,12 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
   private leaveCollection(): void {
     this.collection = null;
     this.managing = false;
-    this.renderBrowse();
-    this.clearLayer('grid');
+    if (this.gridCategory) {
+      void this.openGrid(this.gridCategory.id);
+    } else {
+      this.renderBrowse();
+      this.clearLayer('grid');
+    }
   }
 
   private confirmClear(): void {
@@ -1218,6 +1321,14 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     );
   }
 
+  private addRecoveredTitles(items: I[]): void {
+    const all = this.serverItemsByCategory[''];
+    if (!all || !items.length) return;
+    const ids = new Set(all.map(item => this.itemId(item)));
+    const missing = items.filter(item => !ids.has(this.itemId(item)));
+    if (missing.length) this.setCategoryItems('', all.concat(missing));
+  }
+
   private openSortMenu(): HTMLElement | null {
     return this.layers[this.mode].querySelector<HTMLElement>('.catalog-sort .dropdown.open');
   }
@@ -1266,31 +1377,54 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
 
   protected findItem(categoryId: string, id: string): I | null {
     const inCat = this.itemsByCategory[categoryId] ?? [];
-    return inCat.find((x) => this.itemId(x) === id) ?? this.fallbackItem(id);
+    return inCat.find(item => this.itemId(item) === id)
+      ?? this.itemsByCategory['']?.find(item => this.itemId(item) === id
+        && this.itemCategoryId(item) === categoryId)
+      ?? this.fallbackItem(id);
   }
 
-  private async openGrid(categoryId: string): Promise<void> {
+  // Returns true only when the selected category failed to load.
+  private async openGrid(categoryId: string): Promise<true | void> {
     if (!this.account) return;
     const account = this.account;
     const signal = this.requestSignal;
     if (!signal || signal.aborted) return;
+    if (this.mode === 'grid' && this.gridLoading && !this.collection && this.gridCategory?.id === categoryId) {
+      return;
+    }
+    const category = categoryId
+      ? this.categories.find(item => item.id === categoryId)
+      : { id: '', name: t('common.all') };
+    if (!category) return;
+    const focused = this.current();
+    const sidebarKey = focused?.closest('.catalog-sidebar') ? this.keyFor(focused) : null;
     this.collection = null;
     this.managing = false;
-    this.gridCategory = this.categories.find((c) => c.id === categoryId) ?? null;
+    this.gridCategory = category;
     const request = ++this.gridRequest;
-    this.clearLayer('grid');
-    if (!this.itemsByCategory[categoryId]) {
-      this.renderLoading('grid');
+    this.gridFocusIndex = 0;
+    this.gridVirtualizer.setScrollOffset(0);
+    this.gridLoading = !this.itemsByCategory[categoryId];
+    if (this.gridLoading) {
+      if (this.hasCatalogSidebar()) {
+        this.renderGrid(false);
+        this.place((sidebarKey ? this.resolveKey(sidebarKey) : null)
+          ?? this.layers.grid.querySelector<HTMLElement>('.catalog-sidebar [aria-current="true"]'), this.placementVia());
+      } else {
+        this.clearLayer('grid');
+        this.renderLoading('grid');
+      }
+      let failed = false;
       try {
-        const items = await this.loadVisibleItems(
-          account,
-          categoryId,
-          signal,
-        );
+        const items = await this.loadVisibleItems(account, categoryId, signal);
         if (signal.aborted || this.account?.id !== account.id) return;
-        this.setCategoryItems(categoryId, items);
+        if (request === this.gridRequest) {
+          this.setCategoryItems(categoryId, items);
+          if (categoryId) this.addRecoveredTitles(items);
+        }
       } catch (err) {
         if (signal.aborted) return;
+        failed = true;
         log.error(
           'Catalog category load failed',
           'event=xtream.view.load.failed',
@@ -1300,7 +1434,6 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         );
       }
       if (signal.aborted || this.account?.id !== account.id) return;
-      // Back (or another category) may have superseded this grid meanwhile.
       if (this.mode !== 'grid' || request !== this.gridRequest) {
         log.debug(
           'Catalog category load superseded',
@@ -1311,11 +1444,16 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         );
         return;
       }
-      this.clearLayer('grid');
+      this.gridLoading = false;
+      if (this.hasCatalogSidebar()) {
+        this.renderGrid(false);
+        return failed ? true : undefined;
+      }
     }
-    this.gridFocusIndex = 0;
-    this.gridVirtualizer.setScrollOffset(0);
-    this.renderGrid();
+    this.renderGrid(false);
+    this.place((sidebarKey ? this.resolveKey(sidebarKey) : null)
+      ?? this.layers.grid.querySelector<HTMLElement>('[data-grid-index] [data-focusable]')
+      ?? this.layers.grid.querySelector<HTMLElement>('.catalog-grid [data-focusable]'), this.placementVia());
   }
 
   protected posterCell(name: string, poster: string): Safe {
@@ -1333,6 +1471,10 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         id,
       }),
     )));
+  }
+
+  invalidateConcealment(): void {
+    this.concealmentStale = true;
   }
 
   // Lock badges follow the unlock session without changing what is listed.
@@ -1400,7 +1542,8 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     morph(this.layers[mode], this.loadingMarkup());
   }
 
-  private sortControls(): Safe {
+  private sortControls(preserveMenu = false): Safe {
+    if (preserveMenu) return html`<div class="catalog-sort" data-nav-container data-self-activate data-morph-preserve></div>`;
     const by = this.sort.by;
     return html`
       <div class="catalog-sort" data-nav-container data-self-activate>
@@ -1546,10 +1689,84 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     `;
   }
 
-  // `followView`: the window follows a user scroll, whose offset stays as is;
-  // above the first row the window's offset is 0 while the view's is not.
+  private hasCatalogSidebar(): boolean {
+    return !this.layers.browse.querySelector('.catalog-browse');
+  }
+
+  private gridViewportWidth(): number {
+    return this.hasCatalogSidebar() ? CATALOG_GRID_WITH_SIDEBAR_WIDTH : CATALOG_GRID_VIEWPORT_WIDTH;
+  }
+
+  private filterList(): HTMLElement | null {
+    return this.layers.grid.querySelector<HTMLElement>('.catalog-filter-list');
+  }
+
+  private filterIndexOf(key: string): number {
+    if (!key.startsWith(FILTER_KEY_PREFIX)) return -1;
+    const id = key.slice(FILTER_KEY_PREFIX.length);
+    return this.categories.findIndex(category => category.id === id);
+  }
+
+  private revealFilter(index: number): boolean {
+    const list = this.filterList();
+    if (!list || !this.filterVirtualizer.ensureVisible(index, list.clientHeight || FILTER_VIEWPORT_HEIGHT)) {
+      return false;
+    }
+    this.renderGrid(false, true);
+    return true;
+  }
+
+  private moveFilterFocus(current: HTMLElement, action: 'up' | 'down'): boolean {
+    const index = current.dataset.filterIndex;
+    if (index === undefined) return false;
+    const next = Number(index) + (action === 'up' ? -1 : 1);
+    if (next < 0) {
+      this.place(this.layers.grid.querySelector<HTMLElement>('[data-key="filter:watchlist"]'), 'key');
+    } else if (next < this.categories.length) {
+      this.revealFilter(next);
+      this.place(this.layers.grid.querySelector<HTMLElement>(`[data-filter-index="${next}"]`), 'key');
+    }
+    return true;
+  }
+
+  private renderSidebar(): Safe {
+    const active = this.collection ? null : this.gridCategory?.id;
+    const count = this.categories.length;
+    const viewport = this.filterList()?.clientHeight || FILTER_VIEWPORT_HEIGHT;
+    const { start, end } = this.filterVirtualizer.getRange(count, viewport);
+    return html`
+      <aside class="catalog-sidebar" data-nav-container data-self-activate aria-label="${t('catalog.allCategories')}">
+        <button class="catalog-cat" data-focusable data-key="filter:all" data-category-id=""
+                aria-current="${String(active === '')}">${t('common.all')}</button>
+        ${(['continue', 'watchlist'] as const).map(kind => html`
+          <button class="catalog-cat" data-focusable data-key="filter:${kind}"
+                  data-collection-see-all="${kind}"
+                  aria-current="${String(this.collection === kind)}">${this.collectionTitle(kind)}</button>
+        `)}
+        <h2 class="catalog-sidebar-heading">${t('catalog.allCategories')}</h2>
+        <div class="catalog-filter-list" data-key="catalog-filter-list">
+          <div class="catalog-filter-track" style="height:${this.filterVirtualizer.getTotalSize(count)}px">
+            ${this.categories.slice(start, end).map((category, offset) => html`
+              <button class="catalog-cat" data-focusable data-key="${FILTER_KEY_PREFIX}${category.id}"
+                      data-filter-index="${start + offset}" data-category-id="${category.id}"
+                      aria-current="${String(active === category.id)}"
+                      style="top:${this.filterVirtualizer.getItemOffset(start + offset)}px">
+                ${this.account ? raw(categoryLockBadge(this.parentalKind, this.account.id, category.id)) : ''}
+                ${category.name}
+              </button>
+            `)}
+          </div>
+        </div>
+      </aside>
+    `;
+  }
+
+  // `followView`: keep the scroll offset that the viewer is currently moving.
   protected renderGrid(restoreFocus = true, followView = false): void {
-    this.dismissSort(null);
+    // An incidental scroll while the dropdown is open can re-window the
+    // grid before the viewer selects an option.
+    const menu = followView ? this.openSortMenu() : null;
+    if (!menu) this.dismissSort(null);
     this.showLayer('grid');
     const gridLayer = this.layers.grid;
     const cat = this.gridCategory;
@@ -1557,14 +1774,15 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     if (kind && this.account) this.resume = this.visibleResume(this.account.id);
     const source = this.gridSource();
     const count = source.count;
-    if (kind && count === 0) {
+    const sidebar = this.hasCatalogSidebar();
+    if (!sidebar && kind && count === 0) {
       this.leaveCollection();
       return;
     }
     if (restoreFocus) {
       const focused = parseKey(this.focusScope.focusKey);
       const key = this.gridReturnKey ?? (focused?.mode === 'grid' ? focused.key : null);
-      if (kind && key) {
+      if (key) {
         const index = this.gridIndexOf(key);
         if (index >= 0) this.gridFocusIndex = index;
       }
@@ -1578,7 +1796,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         Math.max(0, previousView.scrollTop - this.gridTrackStart(previousView, previousTrack)),
       );
     }
-    const viewportWidth = previousTrack?.clientWidth || CATALOG_GRID_VIEWPORT_WIDTH;
+    const viewportWidth = previousTrack?.clientWidth || this.gridViewportWidth();
     const viewportHeight = previousView?.clientHeight || CATALOG_GRID_VIEWPORT_HEIGHT;
     if (restoreFocus && count) {
       this.gridVirtualizer.ensureVisible(this.gridFocusIndex, viewportWidth, viewportHeight);
@@ -1596,20 +1814,23 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     }
     const managing = !!kind && this.managing;
     morph(gridLayer, html`
+      <div class="${sidebar ? 'catalog-grid-layout' : 'catalog-grid-classic'}" data-key="catalog-grid-layout">
+      ${sidebar ? this.renderSidebar() : ''}
       <div class="catalog-view catalog-grid${managing ? ' catalog-managing' : ''}" data-nav-container>
         <h1 class="catalog-grid-title">${kind ? html`
           ${this.collectionTitle(kind)} <span class="catalog-grid-count">${this.collectionCount(kind, count)}</span>
         ` : cat ? cat.name : this.kicker}</h1>
-        ${kind ? this.collectionActions(actionWidth) : this.sortControls()}
+        ${this.gridLoading ? '' : kind ? (count ? this.collectionActions(actionWidth) : '') : this.sortControls(!!menu)}
         ${count === 0
-          ? html`<p class="catalog-hint">${kind
-            ? t(kind === 'continue' ? 'catalog.continueWatchingEmpty' : 'catalog.watchlistEmpty')
-            : this.gridEmptyMessage}</p>`
+          ? html`<p class="catalog-hint">${this.gridLoading ? t('common.loading')
+            : kind ? t(kind === 'continue' ? 'catalog.continueWatchingEmpty' : 'catalog.watchlistEmpty')
+            : cat?.id === '' ? this.emptyMessage : this.gridEmptyMessage}</p>`
           : html`
             <div class="catalog-grid-track"
                  style="height:${this.gridVirtualizer.getTotalSize(count, viewportWidth)}px">${cells}
             </div>
           `}
+      </div>
       </div>
       ${managing ? html`
         <div class="edit-hints catalog-manage-hints">
@@ -1618,6 +1839,9 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
         </div>
       ` : ''}
     `);
+    if (menu) this.nav.setRestrict(menu);
+    const filters = this.filterList();
+    if (filters) this.scrollGuard.syncOffset(filters, 'vertical', this.filterVirtualizer.scrollOffset);
     const view = gridLayer.querySelector<HTMLElement>('.catalog-grid');
     const track = gridLayer.querySelector<HTMLElement>('.catalog-grid-track');
     const viewOffset = this.gridVirtualizer.scrollOffset === 0
@@ -1635,10 +1859,13 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
       );
     }
     if (restoreFocus) {
+      const sidebarFocus = this.current()?.closest<HTMLElement>('.catalog-sidebar [data-focusable]');
       const focused = gridLayer.querySelector<HTMLElement>(
         `[data-grid-index="${this.gridFocusIndex}"] [data-focusable]`,
       );
-      this.place(focused ?? gridLayer.querySelector<HTMLElement>('[data-focusable]'), this.placementVia());
+      this.place(sidebarFocus ?? focused ?? gridLayer.querySelector<HTMLElement>(
+        '.catalog-sidebar [aria-current="true"], .catalog-grid [data-focusable]',
+      ), this.placementVia());
     }
   }
 
@@ -1647,7 +1874,7 @@ export abstract class CatalogView<C extends { id: string; name: string }, I exte
     if (!count) return false;
     const track = this.layers.grid.querySelector<HTMLElement>('.catalog-grid-track');
     const view = this.layers.grid.querySelector<HTMLElement>('.catalog-grid');
-    const viewportWidth = track?.clientWidth || CATALOG_GRID_VIEWPORT_WIDTH;
+    const viewportWidth = track?.clientWidth || this.gridViewportWidth();
     const next = this.gridVirtualizer.getAdjacentIndex(
       this.gridFocusIndex,
       direction,

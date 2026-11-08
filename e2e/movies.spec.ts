@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, type Page } from './helpers';
+import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, type Page, clickPlaybackMenu } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 
 // A minimal ASS body with one dialogue active from t=0, so assjs renders it as
@@ -82,106 +82,41 @@ async function claimScrollEndQuirk(page: Page): Promise<void> {
   await page.evaluate(() => document.documentElement.classList.add('q-scroll-end-padding'));
 }
 
-test('keeps the focus ring clear of the rail edge at See all', async ({ page }) => {
+test('keeps the focus ring clear of the grid edges', async ({ page }) => {
   await seedMovies(page, { streams: 30 });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
   await claimScrollEndQuirk(page);
   await enterTab(page, 'movies');
-  await page.locator('.catalog-tile[data-item-id="100"]')
-    .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-  for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowRight');
-  const seeAll = page.locator('#view-movies .catalog-see-all');
-  await expect(seeAll).toHaveClass(/focused/);
-  await expect(seeAll).toContainText('30 movies');
-  // The ring (2px offset + 3px outline + 6px glow) must sit inside the track.
-  await expect.poll(() => seeAll.evaluate((el) => {
-    const track = el.parentElement!.getBoundingClientRect();
-    return Math.round(track.right - el.getBoundingClientRect().right);
+  const grid = page.locator('#view-movies .catalog-grid');
+  await expect(grid.locator('.catalog-grid-title')).toHaveText('All');
+  await grid.locator('.catalog-tile').first().hover();
+  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight');
+  const tile = grid.locator('.catalog-tile.focused');
+  await expect(tile).toHaveAttribute('data-item-id', '104');
+  await expect.poll(() => tile.evaluate(el => {
+    const grid = el.closest('.catalog-grid')!.getBoundingClientRect();
+    return grid.right - el.getBoundingClientRect().right;
   })).toBeGreaterThanOrEqual(11);
-  // On such an engine the room past the last tile must come from content.
-  // Drop the padding here to measure what it would scroll to.
-  expect(await seeAll.evaluate((el) => {
-    const track = el.parentElement!;
-    track.style.paddingRight = '0';
-    const room = track.scrollWidth - (el.offsetLeft + el.offsetWidth - track.offsetLeft);
-    track.style.paddingRight = '';
-    return room;
-  })).toBeGreaterThanOrEqual(12);
-  await page.keyboard.press('Enter');
-  await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Cat A');
 });
 
-test('Back to See all jumps straight to it under full animation', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('iptv_animation_mode', JSON.stringify('full')));
+test('category filters keep their focus when changing the poster grid', async ({ page }) => {
   await seedXtream(page, { catalog: 'large' });
   await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
   await enterTab(page, 'movies');
-  await expect(page.locator('html')).toHaveAttribute('data-animation', 'full');
-  // Walk the rail with the remote, as a viewer would, so See all is scrolled
-  // into view before it opens its grid.
-  await page.locator('#view-movies [data-rail-key="cat:4"] .catalog-tile').first()
-    .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-  const seeAll = page.locator('#view-movies .catalog-see-all[data-category-id="4"]');
-  for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowRight');
-  await expect(seeAll).toHaveClass(/focused/);
-  await expect.poll(() => seeAll.evaluate((el) => {
-    const track = el.parentElement!.getBoundingClientRect();
-    const box = el.getBoundingClientRect();
-    return box.left >= track.left && box.right <= track.right && box.top >= 0
-      && box.bottom <= window.innerHeight;
-  })).toBe(true);
+  const filters = page.locator('#view-movies .catalog-filter-list .catalog-cat');
+  await expect(filters).toHaveCount(8);
+  await filters.first().hover();
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowDown');
+  await expect(filters.nth(3)).toHaveClass(/focused/);
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Cat D');
-  // Linger past FOCUS_REPEAT_WINDOW_MS, inside which SpatialNav scrolls
-  // instantly anyway, as a held key would.
-  await page.waitForTimeout(400);
-  // Read the layout in the same task as Back: the resident browse must have
-  // the tile in place already, with no scroll left to replay.
-  const placement = await page.evaluate(() => {
-    const back = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true });
-    Object.defineProperty(back, 'keyCode', { get: () => 27 });
-    document.dispatchEvent(back);
-    const tile = document.querySelector<HTMLElement>('#view-movies .catalog-see-all[data-category-id="4"]')!;
-    const track = tile.parentElement!.getBoundingClientRect();
-    const box = tile.getBoundingClientRect();
-    return {
-      focused: tile.classList.contains('focused'),
-      inTrack: box.left >= track.left && box.right <= track.right,
-      onScreen: box.top >= 0 && box.bottom <= window.innerHeight,
-    };
-  });
-  expect(placement).toEqual({ focused: true, inTrack: true, onScreen: true });
-});
-
-test('Left and Right stop at the ends of All categories', async ({ page }) => {
-  await seedXtream(page, { catalog: 'large' });
-  await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
-  await enterTab(page, 'movies');
-  const cats = page.locator('#view-movies .catalog-category-rail .catalog-cat');
-  await expect(cats).toHaveCount(8);
-  const focusedKey = () => page.locator('#view-movies .focused').getAttribute('data-key');
-  await cats.first().evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-  await expect.poll(focusedKey).toBe('c:1');
-  // SpatialNav would otherwise carry focus off the rail to another rail's tile.
-  await page.keyboard.press('ArrowLeft');
-  await expect.poll(focusedKey).toBe('c:1');
-  // The rail bleeds under the left margin; a cell revealed on the right
-  // must still end inside the rail, ring included.
-  const clearOfRightEdge = () => page.locator('#view-movies .catalog-category-rail .focused').evaluate((el) => {
-    const rail = el.closest<HTMLElement>('.catalog-category-rail')!;
-    const right = rail.getBoundingClientRect().left + rail.clientLeft + rail.clientWidth;
-    return Math.round(right - el.getBoundingClientRect().right);
-  });
-  for (let i = 2; i <= 8; i++) {
-    await page.keyboard.press('ArrowRight');
-    await expect.poll(focusedKey).toBe(`c:${String(i)}`);
-    await expect.poll(clearOfRightEdge).toBeGreaterThanOrEqual(11);
-  }
+  await expect(filters.nth(3)).toHaveAttribute('aria-current', 'true');
+  await expect(filters.nth(3)).toHaveClass(/focused/);
+  await expect(page.locator('#view-movies .catalog-tile').first()).toBeVisible();
   await page.keyboard.press('ArrowRight');
-  await expect.poll(focusedKey).toBe('c:8');
+  await expect(page.locator('#view-movies .catalog-tile.focused')).toHaveCount(1);
+  await page.keyboard.press('ArrowLeft');
+  await expect(filters.nth(3)).toHaveClass(/focused/);
 });
 
 test('gives a scroll-end spacer only to flex containers', async ({ page }) => {
@@ -199,7 +134,7 @@ test('gives a scroll-end spacer only to flex containers', async ({ page }) => {
     })
     .map((el) => el.className));
   await enterTab(page, 'movies');
-  await expect(page.locator('#view-movies .catalog-category-rail')).toBeVisible();
+  await expect(page.locator('#view-movies .catalog-filter-list')).toBeVisible();
   expect(await misplaced()).toEqual([]);
   await enterTab(page, 'epg');
   await expect(page.locator('#view-epg .epg-date-list')).toBeVisible();
@@ -219,7 +154,7 @@ test('browse Movies, open a detail, and start playback', async ({ page }) => {
   await enterTab(page, 'movies');
   await expect(page.locator('#view-movies')).toBeVisible();
 
-  await expect(page.locator('#view-movies .catalog-rail-title')).toContainText('Cat A');
+  await expect(page.locator('#view-movies .catalog-filter-list .catalog-cat')).toContainText('Cat A');
   await expect(page.locator('.catalog-tile[data-item-id="10"]')).toContainText('Movie One');
 
   // Focus the poster and open its detail. Dispatch an explicit bubbling
@@ -263,7 +198,7 @@ test('Back walks Movies detail -> browse -> Live instead of ejecting', async ({ 
   // First Back steps detail -> browse: still inside Movies, not ejected to Live.
   await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
   await expect(page.locator('#view-movies')).toBeVisible();
-  await expect(page.locator('#view-movies .catalog-browse')).toBeVisible();
+  await expect(page.locator('#view-movies .catalog-grid')).toBeVisible();
   await expect(page.locator('#view-channels')).toBeHidden();
 
   // Second Back from the browse top level returns to Live.
@@ -271,7 +206,7 @@ test('Back walks Movies detail -> browse -> Live instead of ejecting', async ({ 
   await expect(page.locator('#view-channels')).toBeVisible();
 });
 
-test('Back from a detail finds browse scrolled and focused as it was left', async ({ page }) => {
+test('Back from a detail finds the grid scrolled and focused as it was left', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('iptv_animation_mode', JSON.stringify('full')));
   await seedMovies(page, { streams: 20 });
   await page.goto('/');
@@ -280,34 +215,34 @@ test('Back from a detail finds browse scrolled and focused as it was left', asyn
   await expect(page.locator('html')).toHaveAttribute('data-animation', 'full');
   await page.locator('.catalog-tile[data-item-id="100"]')
     .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-  for (let i = 0; i < 15; i++) await page.keyboard.press('ArrowRight');
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowDown');
   const tile = page.locator('#view-movies .catalog-tile[data-item-id="115"]');
   await expect(tile).toHaveClass(/focused/);
-  const track = page.locator('#view-movies .catalog-browse .catalog-rail-track').first();
-  // Let the smooth scroll settle before recording where browse was left.
-  let left = -1;
+  const track = page.locator('#view-movies .catalog-grid');
+  // Let the smooth scroll settle before recording where the grid was left.
+  let top = -1;
   await expect.poll(async () => {
-    const now = await track.evaluate((el) => el.scrollLeft);
-    const settled = now > 0 && now === left;
-    left = now;
+    const now = await track.evaluate((el) => el.scrollTop);
+    const settled = now > 0 && now === top;
+    top = now;
     return settled;
   }, { intervals: [150] }).toBe(true);
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-movies .detail-plot')).toContainText('A plot.');
-  // Read in the same task as Back: a rebuilt browse would sit at offset 0
+  // Read in the same task as Back: a rebuilt grid would sit at offset 0
   // and only glide back to the tile afterward.
   const back = await page.evaluate(() => {
     document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true }));
     const el = document.querySelector<HTMLElement>('#view-movies .catalog-tile[data-item-id="115"]')!;
     return {
       focused: el.classList.contains('focused'),
-      scrollLeft: el.parentElement!.scrollLeft,
+      scrollTop: el.closest('.catalog-grid')!.scrollTop,
     };
   });
-  expect(back).toEqual({ focused: true, scrollLeft: left });
+  expect(back).toEqual({ focused: true, scrollTop: top });
 });
 
-test('VOD playback suppresses the live channel sidebar and shows a VOD-only menu at the pointer edges', async ({ page }) => {
+test('VOD playback suppresses the live channel sidebar and shows a VOD-only menu from the playback bar', async ({ page }) => {
   await seedMovies(page);
   await routeLiveManifest(page);
   // Keep VOD alive in the player: neuter the <video> so the empty mock movie
@@ -337,9 +272,10 @@ test('VOD playback suppresses the live channel sidebar and shows a VOD-only menu
   await page.waitForTimeout(200);
   expect(await page.locator('#player-sidebar.visible').count()).toBe(0);
 
-  // The right edge opens the VOD menu with playback speed, but never the live
-  // channel rows or the "Playing:" channel name.
+  // The playback bar opens VOD actions, including speed.
   await page.mouse.move(1900, 540);
+  await expect(page.locator('#player-menu')).not.toHaveClass(/visible/);
+  await clickPlaybackMenu(page);
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
   await expect(menu).toContainText('Title Info');
@@ -353,6 +289,53 @@ test('VOD playback suppresses the live channel sidebar and shows a VOD-only menu
   await menu.locator('[data-playback-rate="1.5"]').click();
   await expect.poll(() => page.locator('#video-player')
     .evaluate((video: HTMLVideoElement) => video.playbackRate)).toBe(1.5);
+});
+
+test('Down opens the VOD shortcuts and OK reaches the subtitle picker', async ({ page }, testInfo) => {
+  await seedMovies(page, { subtitles: true });
+  await neuterVideo(page);
+  await page.goto('/');
+  await enterTab(page, 'movies');
+  await page.locator('#view-movies .catalog-tile').first().click();
+  await page.locator('#view-movies [data-action="play"]').click();
+  const bar = page.locator('#player-osd');
+  const menu = page.locator('#player-menu');
+  const subtitles = bar.getByRole('button', { name: 'Subtitles', exact: true });
+  const menuButton = bar.getByRole('button', { name: 'Menu', exact: true });
+  await expect(subtitles).toBeVisible();
+  const barBox = (await bar.boundingBox())!;
+  const buttonBox = (await menuButton.boundingBox())!;
+  expect(barBox.x + barBox.width - buttonBox.x - buttonBox.width).toBeLessThan(40);
+
+  await page.keyboard.press('ArrowDown');
+  await expect(subtitles).toHaveClass(/focused/);
+  await page.keyboard.press('Enter');
+  await expect(menu.getByRole('heading', { name: 'Subtitles' })).toBeVisible();
+  await expect(menu.locator('[data-key="sub:-1"]')).toHaveClass(/focused/);
+  await expect(menu.getByText('Track 1')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('subtitle-popup.png'), animations: 'disabled' });
+  await page.evaluate(() => {
+    document.documentElement.dataset.overlay = 'frosted';
+    document.documentElement.dataset.textSize = '150';
+  });
+  await page.screenshot({ path: testInfo.outputPath('subtitle-popup-frosted.png'), animations: 'disabled' });
+
+  await page.keyboard.press('Escape');
+  await expect(menu).not.toHaveClass(/visible/);
+  await expect(subtitles).toHaveClass(/focused/);
+  await page.keyboard.press('ArrowRight');
+  await expect(menuButton).toHaveClass(/focused/);
+  await page.keyboard.press('Enter');
+  await expect(menu.getByRole('heading', { name: 'Menu' })).toBeVisible();
+  await expect(menu.getByText('Settings')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await clickPlaybackMenu(page, 'subtitles');
+  await expect(menu.getByRole('heading', { name: 'Subtitles' })).toBeVisible();
+  await menu.getByText('Track 1').click();
+  await expect(menu).not.toHaveClass(/visible/);
+  await expect(bar.locator('.osd-stream-info')).toContainText('Track 1');
+  await expect(page.locator('#view-player')).toBeVisible();
 });
 
 test('a VOD sidecar subtitle creates its application track when selected', async ({ page }) => {
@@ -382,8 +365,8 @@ test('a VOD sidecar subtitle creates its application track when selected', async
   });
   expect(initialTrackCount).toBe(0);
 
-  // Open the right-edge menu into the Subtitles sub-menu; the sidecar is listed.
-  await page.mouse.move(1900, 540);
+  // Open Menu from the playback bar and go to Subtitles; the sidecar is listed.
+  await clickPlaybackMenu(page);
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
   await page.keyboard.press('ArrowDown'); // Title Info -> Settings
@@ -427,9 +410,9 @@ test('a VOD ASS sidecar renders through the assjs overlay when selected', async 
   await expect(page.locator('#view-player')).toBeVisible();
   await expect(page.locator('#player-osd .osd-channel-name')).toBeVisible();
 
-  // Open the right-edge menu into the Subtitles sub-menu; the ASS sidecar is listed
+  // Open Menu from the playback bar and go to Subtitles; the ASS sidecar is listed
   // (it never becomes a native <track>, so this proves the synthetic-option path).
-  await page.mouse.move(1900, 540);
+  await clickPlaybackMenu(page);
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
   await page.keyboard.press('ArrowDown'); // Title Info -> Settings
@@ -482,11 +465,7 @@ test('after the pointer leaves a grid tile, the first key shows it and the next 
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
   await enterTab(page, 'movies');
-  await page.locator('.catalog-tile[data-item-id="100"]')
-    .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-  for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowRight');
-  await page.keyboard.press('Enter');
-  await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Cat A');
+  await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('All');
 
   const tile = (index: number) => page.locator(`#view-movies [data-grid-index="${String(index)}"] .catalog-tile`);
   await hoverThenLeave(tile(0));
@@ -503,11 +482,7 @@ test('CH+/CH- leave a pointer-hidden tile hidden in the catalog', async ({ page 
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
   await enterTab(page, 'movies');
-  await page.locator('.catalog-tile[data-item-id="100"]')
-    .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-  for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowRight');
-  await page.keyboard.press('Enter');
-  await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Cat A');
+  await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('All');
 
   const tile = (index: number) => page.locator(`#view-movies [data-grid-index="${String(index)}"] .catalog-tile`);
   await hoverThenLeave(tile(0));
@@ -526,11 +501,7 @@ test('a revealed grid tile keeps its ring after the reveal scrolls the grid', as
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
   await enterTab(page, 'movies');
-  await page.locator('.catalog-tile[data-item-id="100"]')
-    .evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-  for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowRight');
-  await page.keyboard.press('Enter');
-  await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Cat A');
+  await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('All');
 
   const tile = page.locator('#view-movies [data-grid-index="0"] .catalog-tile');
   await hoverThenLeave(tile);
@@ -604,10 +575,10 @@ async function openCategoryGrid(page: Page): Promise<void> {
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
   await enterTab(page, 'movies');
-  const seeAll = page.locator('#view-movies .catalog-see-all');
-  await seeAll.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-  await page.keyboard.press('Enter');
+  await page.locator('#view-movies .catalog-cat[data-category-id="1"]').click();
   await expect(page.locator('#view-movies .catalog-grid-title')).toHaveText('Cat A');
+  await expect(page.locator('#view-movies .catalog-tile').first()).toBeVisible();
+  await page.keyboard.press('ArrowRight');
   await expect(gridFocus(page)).toHaveCount(1);
   await page.keyboard.press('ArrowRight');
   await expect(gridFocus(page)).toHaveAttribute('data-item-id', '101');

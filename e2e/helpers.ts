@@ -104,6 +104,12 @@ export async function enterTab(
   page: Page,
   section: 'live' | 'epg' | 'movies' | 'series' | 'settings' | 'search',
 ): Promise<void> {
+  if (section === 'epg') {
+    // The full guide is a Live shortcut, with no tab of its own.
+    await page.evaluate(() => document.dispatchEvent(
+      new KeyboardEvent('keydown', { keyCode: 403, bubbles: true })));
+    return;
+  }
   const tab = page.locator(`.tab-bar-item[data-section="${section}"]`);
   await expect(tab).toBeVisible();
   const box = await tab.boundingBox();
@@ -111,6 +117,16 @@ export async function enterTab(
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
   await page.mouse.up();
+}
+
+/** Open a playback popup from the bar, including after it has auto-hidden. */
+export async function clickPlaybackMenu(page: Page, section: 'main' | 'subtitles' = 'main'): Promise<void> {
+  const button = page.locator(`#player-osd [data-osd-menu="${section}"]`);
+  if (!await button.isVisible()) {
+    await page.evaluate(() => document.dispatchEvent(
+      new KeyboardEvent('keydown', { keyCode: 405, bubbles: true })));
+  }
+  await button.click();
 }
 
 // Both channel rows have a fixed height because their lists are virtualized, so

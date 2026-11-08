@@ -1290,6 +1290,52 @@ describe('Player VOD mode', () => {
     expect(osd.querySelector('.osd-progress[data-seekbar]')).not.toBeNull();
   });
 
+  it('shows 4K for a wide UHD movie when the container probe is unavailable', () => {
+    const video = Object.assign(fakeVideo(3600), { videoWidth: 3840, videoHeight: 1608 });
+    player.init(video);
+    player.playVod(req());
+    video.dispatchEvent(new Event('loadedmetadata'));
+
+    expect(container.querySelector('.osd-stream-info')?.textContent).toContain('4K');
+  });
+
+  it('updates a direct movie badge from its encoded size when the probe resolves', async () => {
+    vi.mocked(probeMedia).mockResolvedValueOnce({
+      videoCodec: 'hvc1', audioCodec: '', width: 3840, height: 2160, fps: 24, hdr: '',
+    });
+    const video = Object.assign(fakeVideo(3600), { videoWidth: 1920, videoHeight: 1080 });
+    player.init(video);
+    player.playVod(req());
+    video.dispatchEvent(new Event('loadedmetadata'));
+    const info = () => container.querySelector('.osd-stream-info')?.textContent;
+    expect(info()).toContain('1080p');
+
+    await flush();
+    expect(info()).toContain('4K');
+
+    player.playVod(req({ itemId: '11', url: 'http://host:8080/movie/u/p/11.mp4' }));
+    video.dispatchEvent(new Event('loadedmetadata'));
+    await flush();
+    expect(info()).toContain('1080p');
+  });
+
+  it('updates the adaptive VOD badge as playback changes resolution', () => {
+    const video = Object.assign(fakeVideo(3600), { videoWidth: 1920, videoHeight: 1080 });
+    player.init(video);
+    player.playVod(req({ url: 'http://host:8080/movie/u/p/10.m3u8' }));
+    video.dispatchEvent(new Event('loadedmetadata'));
+    const info = () => container.querySelector('.osd-stream-info')?.textContent;
+    expect(info()).toContain('1080p');
+
+    Object.assign(video, { videoWidth: 3840, videoHeight: 2160 });
+    video.dispatchEvent(new Event('resize'));
+    expect(info()).toContain('4K');
+
+    Object.assign(video, { videoWidth: 1920, videoHeight: 1080 });
+    video.dispatchEvent(new Event('resize'));
+    expect(info()).toContain('1080p');
+  });
+
   it('merges probed codec/fps/HDR into the VOD OSD when the probe resolves', async () => {
     vi.mocked(probeMedia).mockResolvedValue({ videoCodec: 'hvc1', audioCodec: 'ec-3', width: 3840, height: 2160, fps: 24, hdr: 'PQ' });
     const video = fakeVideo(3600);

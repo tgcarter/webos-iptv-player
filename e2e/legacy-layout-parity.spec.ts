@@ -1,4 +1,4 @@
-import { enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist, type Page } from './helpers';
+import { enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist, type Page, clickPlaybackMenu } from './helpers';
 import { type Browser } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { findGappedLooseText, measureLooseText, newLegacyPage, pixelDiff } from './pixel-parity';
@@ -147,17 +147,6 @@ async function prepareXtream(page: Page): Promise<void> {
   await seedXtream(page, { catalog: 'large' });
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
-}
-
-// Wait out a smooth scroll so both engines are sampled at rest.
-async function railAtRest(p: Page, selector: string): Promise<void> {
-  let last = '';
-  await expect.poll(async () => {
-    const now = await p.locator(selector).evaluate((el) => `${String(el.scrollLeft)},${String(el.scrollTop)}`);
-    const settled = now === last;
-    last = now;
-    return settled;
-  }, { intervals: [100] }).toBe(true);
 }
 
 interface Screen {
@@ -559,30 +548,25 @@ const XTREAM_SCREENS: Screen[] = [
     },
   },
   {
-    // The rail's last tile, focused from the D-pad: its ring and the end
-    // gutter beside it.
-    name: 'movies-see-all',
+    name: 'movies-category-grid',
     budget: 0,
     go: async (p) => {
-      await enterTab(p, 'movies');
-      const first = p.locator('#view-movies [data-rail-key="cat:1"] .catalog-tile').first();
-      await expect(first).toBeVisible();
-      await first.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-      for (let i = 0; i < 20; i++) await p.keyboard.press('ArrowRight');
-      await expect(p.locator('#view-movies .catalog-see-all[data-category-id="1"]')).toHaveClass(/focused/);
-      await railAtRest(p, '#view-movies [data-rail-key="cat:1"] .catalog-rail-track');
+      const view = p.locator('#view-movies');
+      await view.locator('.catalog-cat[data-category-id="1"]').click();
+      await expect(view.locator('.catalog-grid-title')).toHaveText('Cat A');
+      const first = view.locator('.catalog-grid .catalog-tile').first();
+      await first.hover();
+      await expect(first).toHaveClass(/focused/);
     },
   },
   {
-    name: 'movies-all-categories',
+    name: 'movies-category-sidebar',
     budget: 0,
     go: async (p) => {
       const cat = p.locator('#view-movies .catalog-cat[data-category-id="1"]');
       await cat.evaluate((el) => el.dispatchEvent(new CustomEvent('nav:hover', { bubbles: true })));
-      await p.keyboard.press('ArrowRight');
+      await p.keyboard.press('ArrowDown');
       await expect(p.locator('#view-movies .catalog-cat[data-category-id="2"]')).toHaveClass(/focused/);
-      await railAtRest(p, '#view-movies .catalog-rails');
-      await railAtRest(p, '#view-movies .catalog-category-rail');
     },
   },
   {
@@ -634,7 +618,7 @@ const XTREAM_SCREENS: Screen[] = [
     name: 'vod-menu',
     budget: 0.001,
     go: async (p) => {
-      await p.mouse.move(1900, 540);
+      await clickPlaybackMenu(p);
       await expect(p.locator('#player-menu')).toBeVisible();
     },
   },
@@ -651,7 +635,8 @@ const XTREAM_SCREENS: Screen[] = [
     budget: 0.001,
     go: async (p) => {
       await p.locator('[data-menu-action="__menu_back__"]').click();
-      await p.locator('[data-menu-action="__subs_open__"]').click();
+      await p.keyboard.press('Escape');
+      await clickPlaybackMenu(p, 'subtitles');
       await expect(p.locator('[data-menu-action="__subs_search__"]')).toBeVisible();
     },
   },
@@ -662,7 +647,7 @@ const XTREAM_SCREENS: Screen[] = [
     budget: 0.001,
     go: async (p) => {
       await p.locator('[data-menu-action="__subs_track__"][data-track-index="2000"]').click();
-      await p.locator('[data-menu-action="__subs_open__"]').click();
+      await clickPlaybackMenu(p, 'subtitles');
       await p.locator('[data-menu-action="__subs_offset__"]').click();
       await expect(p.locator('#subtitle-offset:not(.hidden)')).toBeVisible();
     },
@@ -675,8 +660,7 @@ const XTREAM_SCREENS: Screen[] = [
     budget: 0.001,
     go: async (p) => {
       await p.keyboard.press('Escape');
-      await p.mouse.move(1900, 540);
-      await p.locator('[data-menu-action="__subs_open__"]').click();
+      await clickPlaybackMenu(p, 'subtitles');
       await p.locator('[data-menu-action="__subs_search__"]').click();
       await expect(p.locator('#subtitle-search .subs-count').first()).toBeVisible();
     },
@@ -695,16 +679,17 @@ const XTREAM_SCREENS: Screen[] = [
       }]);
       await expect(p.locator('.tab-bar-item[data-section="movies"]')).toBeVisible();
       await enterTab(p, 'movies');
-      await expect(p.locator('#view-movies .catalog-tile').first()).toBeVisible();
-      await expect(p.locator('#view-movies .catalog-rail-title').first())
-        .toHaveText('Continue Watching');
+      const view = p.locator('#view-movies');
+      await view.locator('[data-key="filter:continue"]').click();
+      await expect(view.locator('.catalog-tile').first()).toBeVisible();
+      await expect(view.locator('.catalog-grid-title')).toContainText('Continue Watching');
     },
   },
   {
     name: 'movies-continue-management',
     budget: 0,
     go: async p => {
-      await p.locator('#view-movies [data-collection-manage="continue"]').click();
+      await p.locator('#view-movies [data-collection-action="manage"]').click();
       await expect(p.locator('#view-movies .catalog-managing')).toBeVisible();
       await p.locator('#view-movies .catalog-remove-mark').hover();
       await expect(p.locator('#view-movies .catalog-remove-mark')).toHaveClass(/focused/);
@@ -736,6 +721,7 @@ const XTREAM_SCREENS: Screen[] = [
     go: async (p) => {
       await leaveParentalLocked(p);
       await enterTab(p, 'movies');
+      await p.locator('#view-movies [data-key="filter:all"]').click();
       await expect(p.locator('#view-movies .catalog-tile .lock-badge.is-locked').first()).toBeVisible();
     },
   },
@@ -743,7 +729,7 @@ const XTREAM_SCREENS: Screen[] = [
     name: 'movies-sort-directions',
     budget: 0,
     go: async (p) => {
-      const row = p.locator('#view-movies .catalog-layer-browse .catalog-sort');
+      const row = p.locator('#view-movies .catalog-sort');
       await row.locator('.dropdown-trigger').click();
       await row.locator('[data-dropdown-value="name"]').click();
       await row.locator('[data-sort-direction="desc"]').hover();
@@ -754,7 +740,7 @@ const XTREAM_SCREENS: Screen[] = [
     name: 'movies-sort-menu',
     budget: 0,
     go: async (p) => {
-      await p.locator('#view-movies .catalog-layer-browse .dropdown-trigger').click();
+      await p.locator('#view-movies .catalog-sort .dropdown-trigger').click();
       await p.mouse.move(1850, 1040);
       await expect(p.locator('#view-movies .dropdown.open')).toBeVisible();
     },

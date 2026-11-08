@@ -6,7 +6,7 @@ import type { CatalogSortPreference } from '../utils/catalog-sort';
 const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() => {
   const watchlistState = { entries: [] as WatchlistEntry[] };
   return {
-    catalogMock: { loadVodCategories: vi.fn(), loadVodStreams: vi.fn(), loadVodInfo: vi.fn() },
+    catalogMock: { loadAllVodStreams: vi.fn(), loadVodCategories: vi.fn(), loadVodStreams: vi.fn(), loadVodInfo: vi.fn() },
     watchlistState,
     storageMock: {
       getCatalogSort: vi.fn((): CatalogSortPreference => ({ by: 'default', direction: 'asc' })),
@@ -68,6 +68,8 @@ beforeEach(() => {
   Focus.uninstall();
   Element.prototype.scrollIntoView = vi.fn();
   vi.clearAllMocks();
+  // These cases exercise the category-browse fallback.
+  catalogMock.loadAllVodStreams.mockRejectedValue(new Error('Whole catalog unavailable'));
   // clearAllMocks clears calls but not implementations; re-establish the default
   // return so a prior test's mockReturnValue override doesn't leak (order-safety).
   storageMock.getResumeList.mockReturnValue([]);
@@ -88,6 +90,32 @@ async function openWith(cats = [{ id: '1', name: 'Cat A' }], streams = [vod('10'
   await view.open(account);
   return { view, handlers };
 }
+
+it('reuses an in-flight All load and adds newly available titles back to All', async () => {
+  let finishAll!: (items: VodItem[]) => void;
+  catalogMock.loadAllVodStreams.mockReturnValueOnce(new Promise(resolve => { finishAll = resolve; }));
+  catalogMock.loadVodCategories.mockResolvedValue([
+    { id: '1', name: 'Action' }, { id: '2', name: 'Drama' },
+  ]);
+  catalogMock.loadVodStreams.mockResolvedValue([vod('20', 'Recovered movie', '2')]);
+  const view = new Movies(container, { onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlayVod: vi.fn() });
+  Focus.setBase(() => view.focusScope);
+  const ready = view.open(account);
+  const clickFilter = (key: string): void => {
+    container.querySelector<HTMLElement>(`[data-key="filter:${key}"]`)!.click();
+  };
+  await vi.waitFor(() => expect(catalogMock.loadAllVodStreams).toHaveBeenCalledOnce());
+  clickFilter('all');
+  expect(catalogMock.loadAllVodStreams).toHaveBeenCalledOnce();
+  finishAll([vod('10', 'First movie')]);
+  await ready;
+  clickFilter('category:2');
+  await vi.waitFor(() => expect(container.querySelector('.catalog-tile-name')?.textContent)
+    .toBe('Recovered movie'));
+  clickFilter('all');
+  expect(Array.from(container.querySelectorAll('.catalog-tile-name'), tile => tile.textContent))
+    .toEqual(['First movie', 'Recovered movie']);
+});
 
 describe('Movies browse + grid', () => {
   describe('collection management', () => {

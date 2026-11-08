@@ -9,6 +9,7 @@ import {
   measureRowTextFit,
   enterTab,
   SEARCH_M3U,
+  clickPlaybackMenu,
 } from './helpers';
 
 // The player view: playback start, sidebar, action menu, OSD, and live DVR.
@@ -548,7 +549,7 @@ test('the group panel lights the group it slides in under a pointer moved mid-sl
   await expect(page.locator('.focused')).toHaveCount(1);
 });
 
-test('the right-edge player menu opens and lists its color actions', async ({ page }) => {
+test('the playback menu opens and lists its color actions', async ({ page }) => {
   // Smoke-exercises player-menu.ts at runtime (it has no other e2e coverage).
   await routePlaylist(page);
   await seedPlaylist(page);
@@ -627,12 +628,11 @@ test('the player menu reopens with one ring, on its first row', async ({ page })
 
 test('the player menu ring follows the pointer and the D-pad, and returns to the row it rests on', async ({ page }) => {
   await gotoLivePlayer(page);
-  await page.mouse.move(1900, 540);
+  await clickPlaybackMenu(page);
   const menu = page.locator('#player-menu');
   const rows = menu.locator('.menu-item');
   await expect(menu).toHaveClass(/visible/);
-  // Let the panel finish sliding in before aiming at a row.
-  await expect.poll(() => menu.evaluate((el) => el.getBoundingClientRect().right)).toBe(1920);
+  await panelSettled(menu);
 
   await moveOnto(page, rows.nth(1));
   await expect(rows.nth(1)).toHaveClass(/focused/);
@@ -663,29 +663,29 @@ async function panelSettled(panel: ReturnType<Page['locator']>): Promise<void> {
   }, { intervals: [100] }).toBe(true);
 }
 
-test('the player menu lights the row it slides out under', async ({ page }) => {
+test('the playback popup is anchored above the bar and dismisses on a click outside', async ({ page }) => {
   await gotoLivePlayer(page);
+  await clickPlaybackMenu(page);
   const menu = page.locator('#player-menu');
-  const rows = menu.locator('.menu-item');
-  await page.mouse.move(960, 300);
-  await page.keyboard.press('ArrowRight');
-  await expect.poll(() => menu.evaluate((el) => el.getBoundingClientRect().right)).toBe(1920);
-  const box = await rows.nth(2).boundingBox();
-  if (!box) throw new Error('row has no bounding box');
-  await page.keyboard.press('Escape');
+  const bar = page.locator('#player-osd');
+  await panelSettled(menu);
+  const menuBox = (await menu.boundingBox())!;
+  const barBox = (await bar.boundingBox())!;
+  expect(menuBox.y + menuBox.height).toBeLessThan(barBox.y);
+  expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(barBox.x + barBox.width);
+  await page.mouse.click(960, 300);
   await expect(menu).not.toHaveClass(/visible/);
-  // Let it finish sliding out, or the pointer lands on a row still on screen.
-  await expect.poll(() => menu.evaluate((el) => {
-    const rect = el.getBoundingClientRect();
-    return rect.width === 0 || rect.left >= 1920;
-  })).toBe(true);
+  await expect(bar).toBeVisible();
+});
 
-  // From the D-pad, the pointer stops at the edge and the panel slides in beneath it.
-  await noHoverWithoutMove(page);
-  await page.mouse.move(1860, box.y + box.height / 2);
+test('changing the Live channel closes the playback popup', async ({ page }) => {
+  await gotoLivePlayer(page);
+  await clickPlaybackMenu(page);
+  const menu = page.locator('#player-menu');
   await expect(menu).toHaveClass(/visible/);
-  await expect(rows.nth(2)).toHaveClass(/focused/);
-  await expect(page.locator('.focused')).toHaveCount(1);
+  await page.keyboard.press('PageDown');
+  await expect(page.locator('.osd-channel-name')).toHaveText('Channel Two');
+  await expect(menu).not.toHaveClass(/visible/);
 });
 
 test('the channel panel lights the channel it slides out under', async ({ page }) => {
@@ -785,6 +785,7 @@ test('the live subtitle sync adjuster keeps the channel panel shut at the screen
   // Subtitle Sync available on a live channel.
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'userAgent', { configurable: true, value: 'Web0S Chrome/53.0' });
+    Object.defineProperty(HTMLMediaElement.prototype, 'readyState', { configurable: true, get: () => 4 });
     // Native Chromium cannot decode the synthetic stream; keep it from zapping.
     document.addEventListener('error', (event) => {
       if (event.isTrusted && event.target instanceof HTMLMediaElement) event.stopImmediatePropagation();
@@ -808,14 +809,14 @@ test('the live subtitle sync adjuster keeps the channel panel shut at the screen
   await expect(page.locator('#view-channels')).toBeVisible();
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
+  await page.locator('#video-player').dispatchEvent('loadeddata');
   const menu = page.locator('#player-menu');
   const sidebar = page.locator('#player-sidebar');
-  await page.mouse.move(1900, 540);
-  await expect(menu).toHaveClass(/visible/);
-  await expect.poll(() => menu.evaluate((el) => el.getBoundingClientRect().right)).toBe(1920);
-  await menu.locator('[data-menu-action="__subs_open__"]').click();
+  await expect(page.locator('#player-osd [data-osd-menu="subtitles"]')).toBeVisible();
+  await clickPlaybackMenu(page, 'subtitles');
   await menu.locator('[data-menu-action="__subs_track__"][data-track-index="0"]').click();
-  await menu.locator('[data-menu-action="__subs_open__"]').click();
+  await expect(menu).not.toHaveClass(/visible/);
+  await clickPlaybackMenu(page, 'subtitles');
   await menu.locator('[data-menu-action="__subs_offset__"]').click();
   await expect(page.locator('#subtitle-offset:not(.hidden)')).toBeVisible();
   const owner = page.locator('[data-ring-owner]');
@@ -851,44 +852,26 @@ test('the OSD band keeps its edge controls ahead of pointer-triggered panels', a
   await expect(page.locator('#player-menu')).not.toBeVisible();
 });
 
-test('pointer-opened player panels do not reveal or hide the OSD', async ({ page }) => {
-  await routePlaylist(page);
-  await routeLiveManifest(page);
-  await neuterVideo(page);
-  await seedPlaylist(page);
-  await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
-  await page.keyboard.press('Enter');
-
+test('the playback menu reveals the OSD while the Live channel sidebar remains independent', async ({ page }) => {
+  await gotoLivePlayer(page);
   const osd = page.locator('#player-osd');
   await expect(osd).toBeVisible();
-  await page.mouse.move(1890, 1000);
   await page.keyboard.press('Enter');
   await expect(osd).not.toBeVisible();
 
-  await page.mouse.move(1891, 1000);
+  await page.keyboard.press('ArrowRight');
   const menu = page.locator('#player-menu');
-  await expect(menu).toBeVisible();
-  await expect(osd).not.toBeVisible();
-
-  await page.evaluate(() =>
-    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 405, bubbles: true })));
   await expect(menu).toBeVisible();
   await expect(osd).toBeVisible();
   await page.keyboard.press('ArrowRight');
+  await expect(menu).not.toHaveClass(/visible/);
 
-  await page.mouse.move(30, 1000);
   await page.keyboard.press('Enter');
   await expect(osd).not.toBeVisible();
-  await page.mouse.move(29, 1000);
+  await page.mouse.move(29, 700);
   const sidebar = page.locator('#player-sidebar');
   await expect(sidebar).toBeVisible();
   await expect(osd).not.toBeVisible();
-
-  await page.evaluate(() =>
-    document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 405, bubbles: true })));
-  await expect(sidebar).toBeVisible();
-  await expect(osd).toBeVisible();
 });
 
 test('keeps pseudo-localized player menu labels within the panel', async ({ page }) => {

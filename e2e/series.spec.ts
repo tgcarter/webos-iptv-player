@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab } from './helpers';
+import { test, expect, routeLiveManifest, neuterVideo, SAMPLE_M3U, enterTab, clickPlaybackMenu } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 
 // Seed one Xtream account (enables the tab bar) and stub the player_api.php
@@ -38,7 +38,7 @@ async function seedSeries(page: import('@playwright/test').Page): Promise<void> 
   });
 }
 
-test('Continue Watching updates the hero from saved episodes by pointer and remote without loading details', async ({ page }) => {
+test('Continue Watching shows saved episodes by pointer and remote without loading details', async ({ page }) => {
   await seedSeries(page);
   const details: string[] = [];
   page.on('request', request => {
@@ -62,19 +62,17 @@ test('Continue Watching updates the hero from saved episodes by pointer and remo
   await page.goto('/');
   await enterTab(page, 'series');
   const view = page.locator('#view-series');
-  const hero = view.locator('.catalog-hero');
+  await view.locator('.catalog-sidebar [data-collection-see-all="continue"]').click();
   const first = view.locator('[data-resume-episode="e1"]');
   const second = view.locator('[data-resume-episode="e2"]');
-  await first.hover();
-  await expect(view.locator('.catalog-hero-title')).toHaveText('Episode 1');
-  await expect(hero).toHaveCSS('background-image', /\/hero\/1\.svg/);
+  await expect(first).toContainText('Episode 1');
+  await expect(first.locator('img')).toHaveAttribute('src', /\/hero\/1\.svg/);
+  await expect(second).toContainText('Episode 2');
+  await expect(second.locator('img')).toHaveAttribute('src', /\/hero\/2\.svg/);
   await second.hover();
-  await expect(view.locator('.catalog-hero-title')).toHaveText('Episode 2');
-  await expect(hero).toHaveCSS('background-image', /\/hero\/2\.svg/);
+  await expect(second).toHaveClass(/focused/);
   await page.keyboard.press('ArrowLeft');
   await expect(first).toHaveClass(/focused/);
-  await expect(view.locator('.catalog-hero-title')).toHaveText('Episode 1');
-  await expect(hero).toHaveCSS('background-image', /\/hero\/1\.svg/);
   expect(details).toEqual([]);
 });
 
@@ -91,7 +89,7 @@ test('browse Series, open a detail, and play an episode', async ({ page }) => {
   await enterTab(page, 'series');
   await expect(page.locator('#view-series')).toBeVisible();
 
-  await expect(page.locator('#view-series .catalog-rail-title')).toContainText('Cat A');
+  await expect(page.locator('#view-series .catalog-filter-list .catalog-cat')).toContainText('Cat A');
   await expect(page.locator('.catalog-tile[data-item-id="1"]')).toContainText('Series One');
 
   // Open the series detail. Dispatch an explicit bubbling nav:hover so
@@ -136,7 +134,7 @@ test('Back walks Series detail -> browse -> Live instead of ejecting', async ({ 
   // First Back steps detail -> browse: still inside Series, not ejected to Live.
   await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
   await expect(page.locator('#view-series')).toBeVisible();
-  await expect(page.locator('#view-series .catalog-rail-title')).toContainText('Cat A');
+  await expect(page.locator('#view-series .catalog-filter-list .catalog-cat')).toContainText('Cat A');
   await expect(page.locator('#view-channels')).toBeHidden();
 
   // Second Back from the browse top level returns to Live.
@@ -180,7 +178,7 @@ test('episode playback suppresses the live channel sidebar and shows a VOD-only 
 
   // The right edge opens the VOD menu for an episode too, including playback
   // speed but never the live channel rows or the "Playing:" channel name.
-  await page.mouse.move(1900, 540);
+  await clickPlaybackMenu(page);
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
   await expect(menu).toContainText('Title Info');
@@ -215,53 +213,6 @@ test('Down from the tab bar resumes the Series detail Up left', async ({ page })
 const settled = (page: import('@playwright/test').Page) => page.evaluate(() =>
   new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 
-// How far the element sticks out of the catalog's vertical scroller, in px.
-const overhang = (el: Element): number => {
-  let scroller = el.parentElement;
-  while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) {
-    scroller = scroller.parentElement;
-  }
-  const box = el.getBoundingClientRect();
-  const clip = scroller?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
-  return Math.max(0, clip.top - box.top, box.bottom - Math.min(clip.bottom, innerHeight));
-};
-
-test('a key that only shows the ring brings a clipped tile into view', async ({ page }) => {
-  await seedXtream(page, { catalog: 'large' });
-  await routeLiveManifest(page);
-  await page.addInitScript(() => {
-    localStorage.setItem('iptv_text_size', JSON.stringify('150'));
-  });
-  await page.goto('/');
-  await expect(page.locator('#view-channels')).toBeVisible();
-  await enterTab(page, 'series');
-  const tile = page.locator('#view-series .catalog-tile').first();
-  await expect(tile).toBeVisible();
-  await settled(page);
-
-  // Larger text leaves the tile hanging off the bottom at the resting offset.
-  const clip = await tile.evaluate((el) => {
-    const rails = el.closest<HTMLElement>('.catalog-rails')!;
-    rails.style.scrollBehavior = 'auto';
-    rails.scrollTop = 0;
-    rails.style.scrollBehavior = '';
-    return el.getBoundingClientRect().bottom - innerHeight;
-  });
-  expect(clip).toBeGreaterThan(8);
-  await settled(page);
-  const box = (await tile.boundingBox())!;
-  await page.mouse.move(box.x + box.width / 2, box.y + 20);
-  await expect(tile).toHaveClass(/\bfocused\b/);
-  const key = await tile.getAttribute('data-key');
-  await settled(page);
-
-  await page.keyboard.press('ArrowRight');
-  const focused = page.locator('#view-series .focused');
-  await expect(focused).toHaveCount(1);
-  await expect.poll(() => focused.evaluate(overhang)).toBeLessThanOrEqual(1);
-  expect(await focused.getAttribute('data-key')).toBe(key);
-});
-
 test('opening the section with the pointer leaves the catalog where it loads', async ({ page }) => {
   await seedXtream(page, { catalog: 'large' });
   await routeLiveManifest(page);
@@ -273,10 +224,10 @@ test('opening the section with the pointer leaves the catalog where it loads', a
   await settled(page);
   await settled(page);
 
-  expect(await page.locator('#view-series .catalog-rails').evaluate((el) => el.scrollTop)).toBe(0);
-  // Focus waits on the first tile, without a ring, for the first key.
+  expect(await page.locator('#view-series .catalog-grid').evaluate((el) => el.scrollTop)).toBe(0);
+  // Focus waits on All until the first key.
   await expect(page.locator('#view-series .focused')).toHaveCount(0);
   const parked = page.locator('#view-series .focused-parked');
   await expect(parked).toHaveCount(1);
-  expect(await parked.getAttribute('data-key')).toBe(await first.getAttribute('data-key'));
+  await expect(parked).toHaveAttribute('data-key', 'filter:all');
 });

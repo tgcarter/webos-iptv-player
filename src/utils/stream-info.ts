@@ -20,10 +20,10 @@ export interface MediaInfo {
   hdr: string;
 }
 
-// Height-based resolution tier. 0/falsy → null (resolution not known yet).
-export function resolutionBadge(height: number): ResolutionBadge | null {
+// Widescreen 4K encodes can omit the letterbox bars and be shorter than 2160.
+export function resolutionBadge(width: number, height: number): ResolutionBadge | null {
+  if (width >= 3840 || height >= 2160) return { label: '4K', tier: 'uhd' };
   if (!height) return null;
-  if (height >= 2160) return { label: '4K', tier: 'uhd' };
   if (height >= 1080) return { label: '1080p', tier: 'fhd' };
   if (height >= 720) return { label: '720p', tier: 'hd' };
   return { label: 'SD', tier: 'sd' };

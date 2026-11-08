@@ -22,6 +22,7 @@ export type LeaveDir = 'up' | 'down' | 'left' | 'right';
 // Who wins when several scopes want the keys: the higher tier, then within a
 // tier the latest push.
 export const Tier = {
+  playbackBar: 4, // playback shortcuts sit below subtitle panels
   panel: 5,     // a player panel the menus open over: the subtitle search
   overlay: 10,  // dropdowns and player overlays
   bar: 20,      // the tab bar

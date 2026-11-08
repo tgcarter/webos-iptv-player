@@ -10,11 +10,13 @@
   z-index: 2;
 }
 
-.has-live-preview .sidebar {
+.has-live-preview .sidebar,
+.has-live-guide .sidebar {
   flex-shrink: 0;
 }
 
-.has-live-preview .channel-main {
+.has-live-preview .channel-main,
+.has-live-guide .channel-main {
   min-width: 0;
 }
 
@@ -96,6 +98,16 @@
   flex-shrink: 0;
   font-size: calc(24px * var(--font-scale));
   font-variant-numeric: tabular-nums;
+}
+
+.live-preview-guide-channel {
+  margin: 0 0 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+  font-size: calc(21px * var(--font-scale));
+  font-weight: 600;
 }
 
 .live-preview-slot {

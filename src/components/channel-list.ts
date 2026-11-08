@@ -59,6 +59,7 @@ export interface ChannelListOptions {
   onEpgOffsetChanged?: () => void;
   onEnterPreview?: () => boolean;
   onListFocus?: () => void;
+  onGuideFocusChanged?: () => void;
   getPreviewHintState?: () => PreviewHintState;
   onEnterManagement?: () => void;
   authorizeEdit?: (proceed: () => void) => void;
@@ -103,6 +104,8 @@ export class ChannelList {
   private listKey: string | null = null;
   // The focusable the pointer rests on, from the last hover.
   private hovered: HTMLElement | null = null;
+  private guideFocus: HTMLElement | null = null;
+  private readonly onGuideFocusChanged: () => void;
   // The pointer left the focused row, or the preview took the ring.
   private ringHidden = false;
   // How the nav's last focus was asked for, so only a hover reaches the scope as one.
@@ -131,6 +134,7 @@ export class ChannelList {
       onEpgOffsetChanged = () => {},
       onEnterPreview = () => false,
       onListFocus = () => {},
+      onGuideFocusChanged = () => {},
       getPreviewHintState = () => 'off',
       onEnterManagement = () => {},
       authorizeEdit = proceed => proceed(),
@@ -141,6 +145,7 @@ export class ChannelList {
     this.onChannelsChanged = onChannelsChanged;
     this.onEnterPreview = onEnterPreview;
     this.onListFocus = onListFocus;
+    this.onGuideFocusChanged = onGuideFocusChanged;
     this.getPreviewHintState = getPreviewHintState;
     // One list per app; a new instance takes the id over.
     liveList?.dispose();
@@ -170,7 +175,10 @@ export class ChannelList {
       if (el) this.onListFocus();
       const via = this.navVia;
       this.navVia = 'key';
+      if (via === 'key' && el?.dataset.channelIndex !== undefined
+          && (InputMode.current === 'keys' || !this.guideFocus)) this.guideFocus = el;
       this.syncScope(via);
+      this.onGuideFocusChanged();
     }, {
       onRequest: (_el, via) => {
         this.ringHidden = false;
@@ -181,12 +189,14 @@ export class ChannelList {
       const target = e.target as HTMLElement;
       this.hovered = target.hasAttribute('data-focusable') ? target : null;
       this.onListFocus();
+      this.onGuideFocusChanged();
     });
     // The pointer leaving the focused row hides its ring until the next key.
     this.container.addEventListener('nav:unhover', (e: Event) => {
       if (e.target === this.hovered) this.hovered = null;
       if (e.target === this.nav.focused) this.ringHidden = true;
       this.syncScope('pointer');
+      this.onGuideFocusChanged();
     });
     this.container.addEventListener('click', () => this.onListFocus(), true);
     this.editor = new ChannelListEditor(container, this.nav, {
@@ -459,6 +469,7 @@ export class ChannelList {
     if (this.previewFocused) this.ringHidden = true;
     if (ensureFocus && showingRecent) this.recentToReveal = this.nav.focused?.dataset.key ?? null;
     this.syncScope(ensureFocus ? 'key' : 'render');
+    this.onGuideFocusChanged();
   }
 
   private showChannelScrollbar(main: HTMLElement): void {
@@ -558,6 +569,17 @@ export class ChannelList {
     this.editor.dispose();
   }
 
+  getGuideChannel(playing?: Channel): Channel | null {
+    if (this.isEditing) return null;
+    const row = InputMode.current === 'pointer' ? this.hovered : this.nav.focused;
+    return this.channelForGuideRow(row) ?? playing ?? this.channelForGuideRow(this.guideFocus);
+  }
+
+  private channelForGuideRow(row: HTMLElement | null): Channel | null {
+    const index = row && this.container.contains(row) ? row.dataset.channelIndex : undefined;
+    return index === undefined ? null : PlaylistService.getByIndex(Number(index));
+  }
+
   get isEditing(): boolean {
     return this.editor.isEditing;
   }
@@ -600,6 +622,7 @@ export class ChannelList {
   handleAction(action: Action, event?: NumberEvent): boolean {
     const handled = this.dispatchAction(action, event);
     this.syncScope('key');
+    this.onGuideFocusChanged();
     return handled;
   }
 

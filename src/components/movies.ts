@@ -2,7 +2,7 @@ import type { PlaylistEntry, VodCategory, VodItem, VodInfo, ResumeKind, Watchlis
 import { html, raw, Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { StorageService } from '../services/storage-service';
-import { loadVodCategories, loadVodStreams, loadVodInfo } from '../services/xtream-catalog';
+import { loadAllVodStreams, loadVodCategories, loadVodStreams, loadVodInfo } from '../services/xtream-catalog';
 import { xtreamVodUrl } from '../utils/xtream-url';
 import { CatalogView, type CollectionKind, type CollectionEntry } from './catalog-view';
 import { PLAY_ICON, REMOVE_ICON, watchlistIcon } from './icons';
@@ -37,7 +37,7 @@ export class Movies extends CatalogView<VodCategory, VodItem> {
     categoryId: string,
     signal: AbortSignal,
   ): Promise<VodItem[]> {
-    return loadVodStreams(account, categoryId, signal);
+    return categoryId ? loadVodStreams(account, categoryId, signal) : loadAllVodStreams(account, signal);
   }
   protected itemId(v: VodItem): string { return v.streamId; }
   protected itemName(v: VodItem): string { return v.name; }

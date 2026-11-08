@@ -17,15 +17,22 @@ const MASTER = [
 ].join('\n');
 
 describe('resolutionBadge', () => {
-  it('tiers by height', () => {
-    expect(resolutionBadge(2160)).toEqual({ label: '4K', tier: 'uhd' });
-    expect(resolutionBadge(1080)).toEqual({ label: '1080p', tier: 'fhd' });
-    expect(resolutionBadge(1088)).toEqual({ label: '1080p', tier: 'fhd' });
-    expect(resolutionBadge(720)).toEqual({ label: '720p', tier: 'hd' });
-    expect(resolutionBadge(576)).toEqual({ label: 'SD', tier: 'sd' });
+  it('recognizes 4K and cinema crops from the encoded dimensions', () => {
+    expect(resolutionBadge(3840, 2160)).toEqual({ label: '4K', tier: 'uhd' });
+    expect(resolutionBadge(3840, 1608)).toEqual({ label: '4K', tier: 'uhd' });
+    expect(resolutionBadge(4096, 1716)).toEqual({ label: '4K', tier: 'uhd' });
+    expect(resolutionBadge(0, 2160)).toEqual({ label: '4K', tier: 'uhd' });
   });
-  it('returns null for unknown height', () => {
-    expect(resolutionBadge(0)).toBeNull();
+
+  it('tiers smaller sizes by height', () => {
+    expect(resolutionBadge(1920, 1080)).toEqual({ label: '1080p', tier: 'fhd' });
+    expect(resolutionBadge(1920, 1088)).toEqual({ label: '1080p', tier: 'fhd' });
+    expect(resolutionBadge(1280, 720)).toEqual({ label: '720p', tier: 'hd' });
+    expect(resolutionBadge(720, 576)).toEqual({ label: 'SD', tier: 'sd' });
+  });
+
+  it('returns null when both dimensions are unknown', () => {
+    expect(resolutionBadge(0, 0)).toBeNull();
   });
 });
 

@@ -1,6 +1,7 @@
 import {
   enterTab, test, expect, isChromium53, neuterVideo, routeLiveManifest, routePlaylist,
   seedPlaylist, type Page, SAMPLE_M3U,
+  clickPlaybackMenu,
 } from './helpers';
 import { POLYFILLED_APIS } from '../scripts/polyfilled-apis.mjs';
 import { seedXtream } from './fixtures/xtream';
@@ -355,7 +356,7 @@ test('no flex-gap container separates an element from loose text in the catalog'
   await expect(page.locator('#view-player')).toBeVisible();
   await expect(page.locator('#player-osd')).toBeVisible();
 
-  await page.mouse.move(1900, 540);
+  await clickPlaybackMenu(page);
   await expect(page.locator('#player-menu')).toBeVisible();
   await page.locator('[data-menu-action="__subs_open__"]').click();
   const search = page.locator('[data-menu-action="__subs_search__"]');

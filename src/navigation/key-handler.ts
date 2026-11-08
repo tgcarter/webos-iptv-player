@@ -261,13 +261,16 @@ export const KeyHandler = {
     const movedFrom = (e: MouseEvent): boolean => pointerX !== null
       && (e.screenX !== pointerX || e.screenY !== pointerY);
 
+    const hidePointer = (): void => {
+      settleEdgeFocus();
+      Focus.pointerGone();
+      setHoverTarget(null);
+    };
+
     document.addEventListener('keydown', (e: KeyboardEvent) => {
       // webOS reports its cursor appearing or hiding as a key press; neither
       // is the D-pad taking over.
-      if (e.keyCode === K.CURSOR_HIDE) {
-        settleEdgeFocus();
-        Focus.pointerGone();
-      }
+      if (e.keyCode === K.CURSOR_HIDE) hidePointer();
       if (e.keyCode === K.CURSOR_SHOW || e.keyCode === K.CURSOR_HIDE) return;
       settleEdgeFocus();
       setInputMode('keys');
@@ -400,17 +403,10 @@ export const KeyHandler = {
     document.addEventListener('mouseover', (e: MouseEvent) => setHoverTarget(focusableAt(e)));
     // Cursor left the window: forget the last hover so returning to the same
     // element re-dispatches nav:hover (re-showing a cleared highlight).
-    document.documentElement.addEventListener('mouseleave', () => {
-      settleEdgeFocus();
-      Focus.pointerGone();
-      setHoverTarget(null);
-    });
+    document.documentElement.addEventListener('mouseleave', hidePointer);
     document.addEventListener('cursorStateChange', (e: Event) => {
       const detail = (e as CustomEvent<{ visibility?: boolean } | null>).detail;
-      if (detail && detail.visibility === false) {
-        settleEdgeFocus();
-        Focus.pointerGone();
-      }
+      if (detail && detail.visibility === false) hidePointer();
     });
 
     // Magic Remote scroll wheel / desktop mouse wheel

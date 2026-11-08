@@ -56,6 +56,10 @@
   z-index: 60;
 }
 
+.player-osd.menu-open {
+  z-index: 70;
+}
+
 /* Player overlays use a fixed dark palette for video readability; accents still
    follow the theme. The light variant is opt-in via "Player overlay". */
 .player-osd,
@@ -127,8 +131,58 @@
   font-weight: 600;
 }
 
+.osd-channel > .osd-channel-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.osd-shortcuts {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.osd-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 4px 12px;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  background: var(--overlay-chip);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 20px;
+  white-space: nowrap;
+}
+
+.osd-shortcut svg,
+.osd-shortcut-hint svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+}
+
+.osd-shortcut-menu svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.osd-shortcut-hint {
+  color: var(--text-secondary);
+}
+
 .osd-stream-info {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
   align-items: center;
   gap: 8px;
   padding-left: 16px;
@@ -852,37 +906,46 @@
   85%, 100% { transform: translateX(0); }
 }
 
-/* Player right menu (Magic Remote / right key) */
+/* Playback actions open above the bar. */
 .player-menu {
   position: absolute;
-  top: 0;
+  bottom: calc(100% + 12px);
   right: 0;
   width: fit-content;
   min-width: 340px;
-  max-width: 440px;
-  height: 1080px;
+  max-width: 480px;
+  max-height: 620px;
   background: rgba(10, 10, 15, 0.92);
   backdrop-filter: blur(12px);
   z-index: 70;
   display: flex;
   flex-direction: column;
   padding: 24px;
-  transform: translateX(100%);
-  transition: transform 0.25s ease;
-  border-left: 1px solid var(--border);
+  transform: translateY(8px);
+  opacity: 0;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  border: 1px solid var(--border);
+  border-radius: 12px;
 }
 
 .player-menu.visible {
-  transform: translateX(0);
+  transform: translateY(0);
+  opacity: 1;
+}
+
+#view-player .player-menu:not(.visible),
+#view-player .player-menu:not(.visible) * {
+  pointer-events: none;
 }
 
 .player-menu .menu-header {
-  margin-bottom: 32px;
+  flex-shrink: 0;
+  margin-bottom: 16px;
 }
 
 .player-menu .menu-header h2 {
   font-size: 28px;
-  color: var(--accent);
+  color: var(--text-primary);
 }
 
 .player-menu .menu-header .menu-subtitle {
@@ -895,7 +958,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  flex: 1;            /* fill the remaining height of the fixed-height panel */
+  flex: 1;            /* fill the available height of the popup */
   min-height: 0;      /* allow the flex child to shrink so overflow-y can scroll */
   overflow-y: auto;   /* long track lists scroll instead of running off-screen */
   margin: -20px;

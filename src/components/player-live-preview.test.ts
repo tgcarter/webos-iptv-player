@@ -13,7 +13,7 @@ const { pipeline, tracks, osd, playlist, health } = vi.hoisted(() => ({
     reapplyNativeSubtitleCompositor: vi.fn(),
   },
   osd: {
-    show: vi.fn(), hide: vi.fn(), clearFailedIcons: vi.fn(),
+    show: vi.fn(), hide: vi.fn(), closeMenu: vi.fn(), clearFailedIcons: vi.fn(),
     isVisible: vi.fn(() => false), render: vi.fn(), resetTimer: vi.fn(),
     updateMessage: vi.fn(), refreshProgress: vi.fn(),
   },

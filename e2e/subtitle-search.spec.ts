@@ -1,4 +1,4 @@
-import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, type Page } from './helpers';
+import { test, expect, routeLiveManifest, SAMPLE_M3U, enterTab, type Page, clickPlaybackMenu } from './helpers';
 import { seedXtream } from './fixtures/xtream';
 
 // Online-subtitle search for Xtream VOD. The player's "Search online…" subtitle
@@ -101,16 +101,11 @@ async function startVodPlayback(page: Page): Promise<void> {
   await expect(page.locator('#player-osd .osd-channel-name')).toBeVisible();
 }
 
-// Open the right-edge VOD menu, dive into Subtitles, and pick "Search online…"
-// to raise the search overlay; the menu closes as the overlay opens.
+// Open Subtitles from the playback bar, then hand focus to online search.
 async function openSearchOverlay(page: Page): Promise<void> {
-  await page.mouse.move(1900, 540);
+  await clickPlaybackMenu(page, 'subtitles');
   const menu = page.locator('#player-menu');
   await expect(menu).toBeVisible();
-  await page.keyboard.press('ArrowDown'); // Title Info -> Settings
-  await page.keyboard.press('ArrowDown'); // Settings -> Playback Speed
-  await page.keyboard.press('ArrowDown'); // Playback Speed -> Subtitles
-  await page.keyboard.press('Enter');     // open the Subtitles sub-menu (focus lands on "Off")
   await expect(menu).toContainText('Search online');
   await page.keyboard.press('ArrowDown'); // Off -> Search online…
   await page.keyboard.press('Enter');     // open the search overlay
@@ -200,7 +195,7 @@ test('a row hovered while the search box has the caret stays dark until Down lan
   await expect(page.locator('.focused')).toHaveCount(1);
 });
 
-test('the menu opened at the screen edge takes the arrow keys from the search box', async ({ page }) => {
+test('the playback menu takes the arrow keys from the search box', async ({ page }) => {
   await seedVod(page);
   await routeAssrtSearch(page, () => ['a', 'b', 'c'].map((id, i) =>
     assrtSub({ id: `70${String(i)}`, langDesc: '英', name: `Release ${id}`, downloads: 70 - i })));
@@ -217,7 +212,7 @@ test('the menu opened at the screen edge takes the arrow keys from the search bo
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await expect(page.locator('.focused')).toHaveCount(0);
 
-  await page.mouse.move(1900, 540);
+  await clickPlaybackMenu(page);
   await expect(menu).toHaveClass(/visible/);
   await expect(input).not.toBeFocused();
   await expect(menuRows.nth(0)).toHaveClass(/focused/);
@@ -293,10 +288,8 @@ test('the subtitle sync adjuster keeps the keys, and the screen edge keeps the m
   await seedXtream(page);
   await startVodPlayback(page);
   const menu = page.locator('#player-menu');
-  const settled = () => expect.poll(() => menu.evaluate((el) => el.getBoundingClientRect().right)).toBe(1920);
-  await page.mouse.move(1900, 540);
+  await clickPlaybackMenu(page);
   await expect(menu).toHaveClass(/visible/);
-  await settled();
   await menu.locator('[data-menu-action="__subs_open__"]').click();
   await menu.locator('[data-menu-action="__subs_track__"][data-track-index="2000"]').click();
   await menu.locator('[data-menu-action="__subs_open__"]').click();
@@ -308,7 +301,7 @@ test('the subtitle sync adjuster keeps the keys, and the screen edge keeps the m
 
   await page.mouse.move(1700, 540);
   await page.mouse.move(1900, 540);
-  // Past the slide-in, read once: a retrying check would also pass once the
+  // Past the animation, read once: a retrying check would also pass once the
   // menu's own auto-hide closes it.
   await page.waitForTimeout(400);
   expect(await menu.getAttribute('class')).not.toMatch(/visible/);
@@ -317,7 +310,7 @@ test('the subtitle sync adjuster keeps the keys, and the screen edge keeps the m
   await page.evaluate(() => document.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 461, bubbles: true })));
   await expect(page.locator('#subtitle-offset')).toBeHidden();
   await page.mouse.move(1700, 540);
-  await page.mouse.move(1900, 540);
+  await clickPlaybackMenu(page);
   await expect(menu).toHaveClass(/visible/);
   await expect(owner).toHaveAttribute('data-focus-scope', 'player.menu');
   await expect(page.locator('.focused')).toHaveCount(1);

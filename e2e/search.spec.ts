@@ -273,10 +273,10 @@ test('emptying the box on a result detail over Movies brings back its browse', a
   await routeLiveManifest(page);
   await page.goto('/');
   await enterTab(page, 'movies');
-  await expect(page.locator('#view-movies .catalog-rail')).not.toHaveCount(0);
-  // The resident browse must come back as the same node, not be rebuilt by a
+  await expect(page.locator('#view-movies .catalog-grid-track')).not.toHaveCount(0);
+  // The resident grid must come back as the same node, not be rebuilt by a
   // reload (morph keeps the node but drops unknown attributes, so use a property).
-  await page.locator('#view-movies .catalog-browse')
+  await page.locator('#view-movies .catalog-grid')
     .evaluate((el) => { (el as HTMLElement & { testMark?: boolean }).testMark = true; });
   await enterSearch(page);
   await openMovieResult(page, 'one');
@@ -286,8 +286,8 @@ test('emptying the box on a result detail over Movies brings back its browse', a
   await input.fill('');
   await expect(page.locator('#view-movies')).toBeVisible();
   await expect(page.locator('#view-movies .detail-plot')).toHaveCount(0);
-  await expect(page.locator('#view-movies .catalog-rail')).not.toHaveCount(0);
-  expect(await page.locator('#view-movies .catalog-browse')
+  await expect(page.locator('#view-movies .catalog-grid-track')).not.toHaveCount(0);
+  expect(await page.locator('#view-movies .catalog-grid')
     .evaluate((el) => (el as HTMLElement & { testMark?: boolean }).testMark)).toBe(true);
 });
 
@@ -315,7 +315,7 @@ test('clearing Search reloads a Movies browse its deep link interrupted', async 
 
   await page.locator('.tab-bar-search-input').fill('');
   await expect(page.locator('#view-movies')).toBeVisible();
-  await expect(page.locator('#view-movies .catalog-browse .catalog-tile[data-item-id="10"]'))
+  await expect(page.locator('#view-movies .catalog-grid .catalog-tile[data-item-id="10"]'))
     .toContainText('Movie One');
 });
 
@@ -659,7 +659,7 @@ test('a blank click that dismisses the account menu keeps the remote in the sear
   await page.goto('/');
   await expect(page.locator('#view-channels')).toBeVisible();
   await enterTab(page, 'movies');
-  const heading = page.locator('#view-movies .catalog-rail-title').first();
+  const heading = page.locator('#view-movies .catalog-grid-title').first();
   await expect(heading).toBeVisible();
   await enterSearch(page);
 

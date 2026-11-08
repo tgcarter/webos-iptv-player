@@ -82,6 +82,8 @@ describe('PlayerOsd', () => {
       onResync: vi.fn(),
       onPlayNext: vi.fn(),
       onCancelNext: vi.fn(),
+      canSearchSubtitles: () => false,
+      onMenu: vi.fn(),
     };
     osd = new PlayerOsd(container, callbacks);
   });
@@ -117,6 +119,17 @@ describe('PlayerOsd', () => {
     osd.hide();
     expect(osd.pointerPosition()).toEqual({ x: null, y: null });
     expect(container.querySelector('#player-osd')?.classList.contains('hidden')).toBe(true);
+  });
+
+  it('keeps the playback bar visible under the menu and restarts auto-hide on close', () => {
+    state = snapshot({ playback: playback(120), vodTitle: 'Video 1' });
+    osd.setMenuVisible(true);
+    vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_PLAYER_OSD_TIMEOUT_MS);
+    expect(osd.isVisible()).toBe(true);
+
+    osd.setMenuVisible(false);
+    vi.advanceTimersByTime(CONFIG.PLAYER.DEFAULT_PLAYER_OSD_TIMEOUT_MS);
+    expect(osd.isVisible()).toBe(false);
   });
 
   it('uses the configured auto-hide timeout', () => {

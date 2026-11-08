@@ -6,7 +6,7 @@ import type { CatalogSortPreference } from '../utils/catalog-sort';
 const { catalogMock, storageMock, watchlistState, toastMock } = vi.hoisted(() => {
   const watchlistState = { entries: [] as WatchlistEntry[] };
   return {
-    catalogMock: { loadSeriesCategories: vi.fn(), loadSeries: vi.fn(), loadSeriesInfo: vi.fn() },
+    catalogMock: { loadAllSeries: vi.fn(), loadSeriesCategories: vi.fn(), loadSeries: vi.fn(), loadSeriesInfo: vi.fn() },
     watchlistState,
     storageMock: {
       getCatalogSort: vi.fn((): CatalogSortPreference => ({ by: 'default', direction: 'asc' })),
@@ -52,6 +52,8 @@ beforeEach(() => {
   Focus.uninstall();
   Element.prototype.scrollIntoView = vi.fn();
   vi.clearAllMocks();
+  // These cases exercise the category-browse fallback.
+  catalogMock.loadAllSeries.mockRejectedValue(new Error('Whole catalog unavailable'));
   // clearAllMocks clears calls but not implementations; re-establish defaults so a
   // prior test's mockReturnValue override doesn't leak (order-safety).
   storageMock.getResumeList.mockReturnValue([]);

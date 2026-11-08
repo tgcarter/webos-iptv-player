@@ -42,19 +42,17 @@ async function seedCatalog(page: Page): Promise<void> {
   });
 }
 
-const browse = (page: Page, section = 'movies') =>
-  page.locator(`#view-${section} .catalog-layer-browse`);
 const grid = (page: Page, section = 'movies') =>
   page.locator(`#view-${section} .catalog-layer-grid`);
 const tiles = (page: Page, section = 'movies') =>
-  browse(page, section).locator('[data-rail-key="cat:1"] .catalog-tile-name');
+  grid(page, section).locator('.catalog-tile-name');
 
 test.beforeEach(async ({ page }) => {
   await seedCatalog(page);
 });
 
 for (const section of ['movies', 'series'] as const) {
-  test(`${section}: category sorting follows the saved rails and Down enters the sortable category`, async ({ page }) => {
+  test(`${section}: sorting applies to All and leaves saved titles in their own order`, async ({ page }) => {
     await page.addInitScript((kind) => {
       const resume: Record<string, unknown> = {};
       const watchlist: Record<string, unknown> = {};
@@ -75,44 +73,38 @@ for (const section of ['movies', 'series'] as const) {
     }, section);
     await page.goto('/');
     await enterTab(page, section);
-    const layer = browse(page, section);
-    await expect(layer.locator('[data-rail-key="cat:1"] .catalog-tile').first()).toBeAttached();
-    const order = await layer.locator('.catalog-rails-body').evaluate(el => Array.from(el.children)
-      .map(row => row.classList.contains('catalog-sort') ? 'sort' : row.getAttribute('data-rail-key')));
-    expect(order.slice(0, 4)).toEqual(['continue', 'watchlist', 'sort', 'cat:1']);
-    const savedNames = () => layer.locator(
-      '[data-rail-key="continue"] .catalog-tile-name, [data-rail-key="watchlist"] .catalog-tile-name',
-    ).allTextContents();
-    const saved = await savedNames();
+    const layer = grid(page, section);
+    await expect(tiles(page, section).first()).toHaveText('Title 50');
     const trigger = layer.locator('.catalog-sort .dropdown-trigger');
     await trigger.click();
     await layer.locator('[data-dropdown-value="name"]').click();
     await expect(tiles(page, section).first()).toHaveText('Title 1');
-    expect(await savedNames()).toEqual(saved);
     await trigger.hover();
     await expect(trigger).toHaveClass(/focused/);
     await page.keyboard.press('ArrowDown');
-    await expect(layer.locator('[data-rail-key="cat:1"] .catalog-tile.focused')).toHaveCount(1);
+    await expect(layer.locator('.catalog-tile.focused')).toHaveCount(1);
     await page.keyboard.press('ArrowUp');
     await expect(layer.locator('.catalog-sort .focused')).toHaveCount(1);
-    await page.keyboard.press('ArrowUp');
-    await expect(layer.locator('[data-rail-key="watchlist"] .focused')).toHaveCount(1);
+    for (const list of ['continue', 'watchlist']) {
+      await layer.locator(`[data-collection-see-all="${list}"]`).click();
+      await expect(tiles(page, section)).toHaveText(['Saved 9', 'Saved 1']);
+    }
   });
 }
 
-test('sorts whole previews, uses explicit radio directions, and restores server order', async ({ page }) => {
+test('sorts the full catalog, uses explicit radio directions, and restores server order', async ({ page }) => {
   const details: string[] = [];
   page.on('request', request => {
     if (/action=get_(?:vod|series)_info/.test(request.url())) details.push(request.url());
   });
   await page.goto('/');
   await enterTab(page, 'movies');
-  const layer = browse(page);
+  const layer = grid(page);
   await expect(tiles(page).first()).toHaveText('Title 50');
   await expect(layer.getByRole('radio')).toHaveCount(0);
   await layer.locator('.dropdown-trigger').click();
   await layer.locator('[data-dropdown-value="name"]').click();
-  await expect(tiles(page)).toHaveText(Array.from({ length: 20 }, (_, i) => `Title ${i + 1}`));
+  await expect(tiles(page).nth(12)).toHaveText('Title 13');
   await expect(layer.getByRole('radio')).toHaveText(['A–Z', 'Z–A']);
   const asc = layer.getByRole('radio', { name: 'A–Z', exact: true });
   const desc = layer.getByRole('radio', { name: 'Z–A', exact: true });
@@ -153,7 +145,7 @@ test('sorts whole previews, uses explicit radio directions, and restores server 
 test('traps only the open menu, restores the trigger, and navigates both radios by remote', async ({ page }) => {
   await page.goto('/');
   await enterTab(page, 'movies');
-  const layer = browse(page);
+  const layer = grid(page);
   const trigger = layer.locator('.dropdown-trigger');
   await trigger.hover();
   await page.keyboard.press('Enter');
@@ -192,14 +184,14 @@ test('traps only the open menu, restores the trigger, and navigates both radios 
   await expect(trigger).toHaveClass(/focused/);
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await trigger.click();
-  await layer.locator('.catalog-rails-spacer').click({ position: { x: 1600, y: 100 } });
+  await layer.locator('.catalog-grid-title').click();
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
 });
 
 test('keeps virtual grids and newly loaded categories sorted, independently for each section', async ({ page }) => {
   await page.goto('/');
   await enterTab(page, 'movies');
-  const layer = browse(page);
+  const layer = grid(page);
   await layer.locator('.dropdown-trigger').click();
   await layer.locator('[data-dropdown-value="name"]').click();
   await layer.locator('[data-category-id="7"].catalog-cat').click();
@@ -207,11 +199,11 @@ test('keeps virtual grids and newly loaded categories sorted, independently for 
   await expect(full.locator('.catalog-grid-title')).toHaveText('Category 7');
   await expect(full.locator('.catalog-tile-name').first()).toHaveText('Title 1');
   await full.locator('.catalog-tile').first().hover();
-  for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowDown');
-  await expect(full.locator('.catalog-tile.focused .catalog-tile-name')).toHaveText('Title 43');
+  for (let i = 0; i < 9; i++) await page.keyboard.press('ArrowDown');
+  await expect(full.locator('.catalog-tile.focused .catalog-tile-name')).toHaveText('Title 46');
   await page.keyboard.press('ArrowDown');
-  await expect(full.locator('.catalog-tile.focused .catalog-tile-name')).toHaveText('Title 50');
-  for (let i = 0; i < 7; i++) await page.keyboard.press('ArrowUp');
+  await expect(full.locator('.catalog-tile.focused .catalog-tile-name')).toHaveText('Title 46');
+  for (let i = 0; i < 9; i++) await page.keyboard.press('ArrowUp');
   await page.keyboard.press('ArrowUp');
   await expect(full.locator('.catalog-sort .focused')).toHaveCount(1);
   await full.getByRole('radio', { name: 'Z–A' }).click();
@@ -221,7 +213,7 @@ test('keeps virtual grids and newly loaded categories sorted, independently for 
   await expect(layer).toBeVisible();
   await expect(layer.getByRole('radio', { name: 'Z–A' })).toHaveAttribute('aria-checked', 'true');
   await enterTab(page, 'series');
-  const series = browse(page, 'series');
+  const series = grid(page, 'series');
   await expect(series.getByRole('radio')).toHaveCount(0);
   await series.locator('.dropdown-trigger').click();
   await series.locator('[data-dropdown-value="rating"]').click();
@@ -229,32 +221,29 @@ test('keeps virtual grids and newly loaded categories sorted, independently for 
   await expect(tiles(page, 'series').first()).toHaveText('Title 50');
   await page.reload();
   await enterTab(page, 'movies');
-  await expect(browse(page).getByRole('radio', { name: 'Z–A' })).toHaveAttribute('aria-checked', 'true');
-  await expect(browse(page).locator('.dropdown-current')).toHaveText('Name');
+  await expect(grid(page).getByRole('radio', { name: 'Z–A' })).toHaveAttribute('aria-checked', 'true');
+  await expect(grid(page).locator('.dropdown-current')).toHaveText('Name');
   await enterTab(page, 'series');
-  await expect(browse(page, 'series').getByRole('radio', { name: 'Lowest', exact: true }))
+  await expect(grid(page, 'series').getByRole('radio', { name: 'Lowest', exact: true }))
     .toHaveAttribute('aria-checked', 'true');
-  await expect(browse(page, 'series').locator('.dropdown-current')).toHaveText('Rating');
+  await expect(grid(page, 'series').locator('.dropdown-current')).toHaveText('Rating');
 });
 
-for (const mode of ['browse', 'grid']) {
+for (const mode of ['All', 'category']) {
   test(`returns from sorting to the same ${mode} tile until the order changes`, async ({ page }) => {
-    if (mode === 'grid') {
+    if (mode === 'category') {
       const cdp = await page.context().newCDPSession(page);
       await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
     }
     await page.goto('/');
     await enterTab(page, 'movies');
-    if (mode === 'grid') {
-      await browse(page).locator('.catalog-see-all').first().dispatchEvent('nav:hover');
-      await page.keyboard.press('Enter');
-      await expect(grid(page)).toBeVisible();
+    if (mode === 'category') {
+      await grid(page).locator('.catalog-cat[data-category-id="1"]').click();
     }
-    const layer = mode === 'grid' ? grid(page) : browse(page);
-    const content = mode === 'grid' ? layer.locator('.catalog-grid-track')
-      : layer.locator('[data-rail-key="cat:1"]');
+    const layer = grid(page);
+    const content = layer.locator('.catalog-grid-track');
     await content.locator('.catalog-tile').first().hover();
-    const offset = mode === 'grid' ? 3 : 8;
+    const offset = 3;
     for (let i = 0; i < offset; i++) await page.keyboard.press('ArrowRight');
     const focused = content.locator('.catalog-tile.focused');
     await expect(focused).toHaveAttribute('data-item-id', String(100 + offset));
@@ -277,7 +266,7 @@ test('keeps direction labels and selection readable in every theme', async ({ pa
   });
   await page.goto('/');
   await enterTab(page, 'movies');
-  const row = browse(page).locator('.catalog-sort');
+  const row = grid(page).locator('.catalog-sort');
   for (const theme of THEMES) {
     await page.evaluate(id => { document.documentElement.dataset.theme = id; }, theme.id);
     await expect.poll(() => row.evaluate(el => {
@@ -313,7 +302,7 @@ for (const size of ['80', '150']) {
     }, size);
     await page.goto('/');
     await enterTab(page, 'movies');
-    const row = browse(page).locator('.catalog-sort');
+    const row = grid(page).locator('.catalog-sort');
     const trigger = row.locator('.dropdown-trigger');
     const width = await row.locator('.dropdown').evaluate(el => el.getBoundingClientRect().width);
     await trigger.click();
@@ -363,7 +352,7 @@ test('keeps a minimum width when every option is short', async ({ page }) => {
   });
   await page.goto('/');
   await enterTab(page, 'movies');
-  const dd = browse(page).locator('.catalog-sort .dropdown');
+  const dd = grid(page).locator('.catalog-sort .dropdown');
   const { width, content } = await dd.evaluate(el => {
     const style = getComputedStyle(el.querySelector('.dropdown-sizer')!);
     const widest = Math.max(...Array.from(el.querySelectorAll<HTMLElement>('.dropdown-sizer > span')).map(label => {

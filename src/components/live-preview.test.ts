@@ -5,7 +5,7 @@ import { EpgService } from '../services/epg-service';
 import { PlaylistService } from '../services/playlist-service';
 import { StorageService } from '../services/storage-service';
 import { CONFIG } from '../config';
-import type { LivePlaybackSnapshot, Programme } from '../types';
+import type { Channel, LivePlaybackSnapshot, Programme } from '../types';
 import { setDisplayTz } from '../utils/time';
 import type { ChannelList } from './channel-list';
 import type { Player } from './player';
@@ -105,6 +105,7 @@ describe('LivePreview', () => {
     } as unknown as Player;
     const channelList = {
       isEditing: false,
+      getGuideChannel: vi.fn((playing?: Channel) => playing ?? null),
       setPreviewFocused: vi.fn((focused: boolean) => {
         if (!focused) actions.onBlur();
       }),
@@ -357,12 +358,12 @@ describe('LivePreview', () => {
     expect(root.querySelector('.live-preview-day-separator')).not.toBeNull();
   });
 
-  it('leaves program details empty when all EPG is absent', () => {
+  it('shows an empty state when all EPG is absent', () => {
     vi.mocked(EpgService.findChannelId).mockReturnValue(null);
     view.applyState(state());
     expect(root.querySelector('.live-preview-title')).toBeNull();
     expect(root.querySelector('.live-preview-upcoming')).toBeNull();
-    expect(root.querySelector('.live-preview-empty')).toBeNull();
+    expect(root.querySelector('.live-preview-empty')?.textContent).toBe('No program information available.');
     expect(root.querySelector('[role="progressbar"]')).toBeNull();
   });
 

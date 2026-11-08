@@ -34,6 +34,7 @@ const LAYOUT_EPG = `<tv>
     </programme>`).join('')}
 </tv>`;
 const PANEL = '#view-channels #live-preview';
+const VIDEO_SLOT = `${PANEL} .live-preview-slot`;
 const ROW = '#channel-browser .channel-main .channel-item';
 const FAVORITE = `${PANEL} [data-preview-action="favorite"]`;
 const MUTE = `${PANEL} [data-preview-action="mute"]`;
@@ -185,13 +186,13 @@ async function setHidden(page: Page, hidden: boolean): Promise<void> {
 
 test('default Off retains full-screen playback and stop-on-Back', async ({ page }) => {
   await setup(page);
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
   expect(await page.evaluate(() => localStorage.getItem('iptv_live_preview'))).toBeNull();
   await page.locator(ROW).first().click();
   await expect(page.locator('#view-player')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.locator('#view-channels')).toBeVisible();
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
   expect((await snapshot(page)).pauses).toBeGreaterThan(0);
 });
 
@@ -241,7 +242,7 @@ test('selecting the current preview channel again opens full screen', async ({ p
   await page.locator(ROW).first().click();
 
   await expect(page.locator('#view-player')).toBeVisible();
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
 });
 
 test('Back from full screen focuses the channel changed in the player', async ({ page }) => {
@@ -275,7 +276,7 @@ test('a second remote OK on the previewed channel opens full screen', async ({ p
 
   await page.keyboard.press('Enter');
   await expect(page.locator('#view-player')).toBeVisible();
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
 });
 
 test('late manifest results from an old selection cannot replace the active preview', async ({ page }) => {
@@ -335,7 +336,7 @@ test('Back stops the active preview from the list and preview controls', async (
   await expect(page.locator('[data-preview-list-close] .key-back svg')).toBeVisible();
   await expect(page.locator('[data-preview-list-close]')).toContainText('Close');
   await page.keyboard.press('Escape');
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
   await expect(page.locator('#view-channels')).not.toHaveClass(/has-live-preview/);
 
   await selectFirst(page);
@@ -343,7 +344,7 @@ test('Back stops the active preview from the list and preview controls', async (
   await expect(page.locator(MUTE)).toHaveClass(/focused/);
   await expect(page.locator('[data-preview-list-close]')).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
   await expect(page.locator('#view-channels')).toBeVisible();
   await expect(page.locator('#view-channels')).not.toHaveClass(/has-live-preview/);
 });
@@ -376,7 +377,7 @@ test('committed numeric channel entry opens full screen directly', async ({ page
   await page.keyboard.press('2');
   await expect(page.locator('.number-entry')).not.toHaveClass(/visible/);
   await expect(page.locator('#view-player')).toBeVisible();
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
   await expect(page.locator('#video-player source')).toHaveAttribute(
     'src',
     'http://host/ch2.m3u8',
@@ -388,7 +389,7 @@ test('numeric channel entry during a preview opens full screen', async ({ page }
   await selectFirst(page);
   await page.keyboard.press('2');
   await expect(page.locator('#view-player')).toBeVisible();
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
   await expect(page.locator('#video-player source')).toHaveAttribute(
     'src',
     'http://host/ch2.m3u8',
@@ -521,7 +522,7 @@ test('entering channel edit mode closes the active preview', async ({ page }) =>
   await page.evaluate(() => document.dispatchEvent(
     new KeyboardEvent('keydown', { keyCode: 405, bubbles: true }),
   ));
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
   await expect(page.locator('#view-channels')).not.toHaveClass(/has-live-preview/);
   await expect(page.locator('.channel-view')).toHaveClass(/editing/);
   await expect(page.locator('.preview-list-hints')).toHaveCount(0);
@@ -535,7 +536,7 @@ test('entering favorite management closes the active preview', async ({ page }) 
   ));
   await page.locator('[data-group="builtin:favorites"]').click();
   await page.locator('[data-favorite-manage]').click();
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
   await expect(page.locator('#view-channels')).not.toHaveClass(/has-live-preview/);
   await expect(page.locator('.favorite-hints')).toBeVisible();
   await expect(page.locator('.preview-list-hints')).toHaveCount(0);
@@ -838,7 +839,7 @@ test('Stop removes preview and section returns do not restart it', async ({ page
   await selectFirst(page);
   await page.keyboard.press('ArrowRight');
   await stop(page);
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
   await expect(page.locator(`${ROW}.focused`)).toHaveCount(1);
   await selectFirst(page);
   await enterTab(page, 'epg');
@@ -846,7 +847,7 @@ test('Stop removes preview and section returns do not restart it', async ({ page
   const stopped = await snapshot(page);
   expect(stopped.source).toBe('');
   await enterTab(page, 'live');
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
   expect(await snapshot(page)).toMatchObject({
     sameNode: true, source: '', src: null, plays: stopped.plays,
   });
@@ -854,7 +855,7 @@ test('Stop removes preview and section returns do not restart it', async ({ page
   await enterTab(page, 'settings');
   await page.locator('#cancel-settings').click();
   await expect(page.locator('#view-channels')).toBeVisible();
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
 });
 
 test('a current program without a following schedule has one concise empty state', async ({ page }) => {
@@ -893,7 +894,7 @@ test('a preference disabled while backgrounded prevents preview playback resumin
   await page.evaluate(() => localStorage.setItem('iptv_live_preview', 'false'));
   const suspended = await snapshot(page);
   await setHidden(page, false);
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
   await expect(page.locator('#view-channels')).not.toHaveClass(/has-live-preview/);
   expect(await snapshot(page)).toMatchObject({ source: '', src: null, plays: suspended.plays });
 });
@@ -905,7 +906,7 @@ test('disabling the playing source in Settings leaves no preview or stale contro
   await page.locator('#playlist-entries .source-toggle').click();
   await page.locator('#save-settings').click();
   await expect(page.locator('#view-channels')).toBeVisible();
-  await expect(page.locator(PANEL)).toBeHidden();
+  await expect(page.locator(VIDEO_SLOT)).toBeHidden();
   await expect(page.locator(ROW)).toHaveCount(0);
   await expect(page.locator('#view-channels')).not.toHaveClass(/has-live-preview/);
   await expect(page.locator(`${PANEL} .focused`)).toHaveCount(0);

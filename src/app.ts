@@ -155,6 +155,7 @@ class App {
         authorizeEdit: proceed =>
           this.authorizeLiveEditing(t('settings.editChannelList'), proceed),
         onListFocus: () => this.livePreview?.leaveControls(false),
+        onGuideFocusChanged: () => this.livePreview?.queueGuideRefresh(),
         getPreviewHintState: () => this.livePreview?.hintState() ?? 'off',
         onEnterManagement: () => this.livePreview?.close(),
       },
@@ -166,7 +167,7 @@ class App {
       this.channelList.setPlaying(idx, catchupStart);
       if (this.livePreview?.isShowing) this.channelList.render(false);
     },
-    () => !this.sidebar.visible && !this.menu.visible,
+    () => !this.sidebar.visible && !this.menu.visible && !Focus.owner()?.modal,
     () => {
       this.sidebar.refresh();
     }, () => {
@@ -188,7 +189,11 @@ class App {
         if (!this.isCurrentView('player')) this.showView('player');
         action();
       },
-    ));
+    ),
+    section => {
+      if (section) this.menu.show(section);
+      else this.menu?.hide(true);
+    });
     this.epgGrid = new EpgGrid(
       this.views.epg,
       (idx, catchup, scope) => this.playChannel(idx, catchup, scope),
@@ -270,6 +275,7 @@ class App {
       (rate) => this.player.setPlaybackRate(rate),
       () => this.player.subtitleSearchAvailable(),
       () => this.player.openSubtitleSearch(),
+      visible => this.player.onPlaybackMenuVisibility(visible),
     );
 
     this.movies = new Movies(this.views.movies, {
@@ -1060,6 +1066,7 @@ class App {
     applyOverlayStyle(StorageService.getOverlayStyle());
     applyTextSize(StorageService.getTextSize());
     applyAnimationMode(StorageService.getAnimationMode());
+    if (name !== 'player') this.menu?.hide(true);
     this.player.closeSubtitleSearch(); // never let the subtitle overlay linger across a view change
     this.player.closeSubtitleOffset(); // never let the subtitle-sync overlay linger across a view change
     this.epgGrid.dismissPrompt(); // never let the catch-up prompt linger across a view change
@@ -1115,7 +1122,6 @@ class App {
       return;
     }
     this.player.stop();
-    if (section === 'epg') { this.openEpg(); return; }
     if (section === 'movies') {
       this.showView('movies');
       const account = this.activeXtreamAccount();
@@ -1242,8 +1248,7 @@ class App {
     this.viewBeforeSearch = null;
   }
 
-  // Show the guide and refresh its data in the background (shared by the EPG
-  // tab and the red-key shortcut).
+  // The red-key shortcut still opens the full guide for reminders and catch-up.
   private openEpg(): void {
     this.epgGrid.focusChannel(this.player.getCurrentIndex());
     this.showView('epg');
@@ -1435,6 +1440,10 @@ class App {
       this.search.invalidateCatalog();
     }
     const current = this.viewStack[this.viewStack.length - 1];
+    if (concealmentChanged) {
+      if (current !== 'movies') this.movies.invalidateConcealment();
+      if (current !== 'series') this.series.invalidateConcealment();
+    }
     if (current === 'channels') this.channelList.render();
     else if (current === 'epg') this.epgGrid.render();
     else if (current === 'settings' && concealmentChanged) this.settings.refreshCollectionCounts();
@@ -1629,7 +1638,7 @@ class App {
       return;
     }
     if (action === 'yellow' && currentView === 'player') {
-      this.player.showOSD();
+      if (!this.player.handleOsdShortcuts(action)) this.player.showOSD();
       return;
     }
 
@@ -1641,7 +1650,8 @@ class App {
         } else if (this.menu.visible) {
           // Let the menu step out of its audio sub-menu before closing.
           if (!this.menu.handleBack()) this.menu.hide();
-        } else if (!this.livePreview.returnFromFullscreen(true)) {
+        } else if (!this.player.handleOsdShortcuts(action)
+            && !this.livePreview.returnFromFullscreen(true)) {
           this.player.handleAction('back');
         }
         return;
@@ -1707,8 +1717,9 @@ class App {
         this.search.handleAction(action);
         break;
       case 'player':
+        if (!this.sidebar.visible && !this.menu.visible && this.player.handleOsdShortcuts(action)) break;
         if (this.player.isVod()) {
-          // A VOD menu (opened by the pointer) captures D-pad nav; Left closes
+          // The VOD menu captures D-pad nav; Left closes
           // it. Otherwise D-pad drives VOD playback (seek / pause / OSD).
           if (this.menu.visible) {
             if (action === 'up' || action === 'down' || action === 'select') this.menu.handleAction(action);
@@ -1774,9 +1785,7 @@ class App {
       const overOsd = !!osd && !osd.classList.contains('hidden') && !!osdRect
         && e.clientY >= osdRect.top;
 
-      // VOD (movies/series) has no channels and no live menu — only the OSD
-      // (title + seek bar) is pointer-revealable; suppress the channel sidebar
-      // and the live player menu.
+      // Movies and episodes have no channel sidebar.
       const vod = this.player.isVod();
       // A modal over the player, such as the subtitle sync adjuster, keeps
       // the edge panels shut.
@@ -1799,22 +1808,8 @@ class App {
         }
       }
 
-      // Right menu. Live/catch-up and VOD alike; for VOD it shows the VOD action
-      // set (Info, Settings) plus any audio/subtitle tracks — the channel rows
-      // are hidden, so it's never empty.
-      if (!overOsd && !modal && e.clientX > 1840 && !this.sidebar.visible) {
-        this.menu.show();
-      } else if (this.menu.visible) {
-        const overMenu = !!(e.target as HTMLElement).closest('.player-menu');
-        if (overMenu) {
-          this.menu.resetTimer();
-        } else if (e.clientX < 1540) {
-          this.menu.hide();
-        }
-      }
-
       // Bottom OSD info bar
-      if (e.clientY > 900 && !this.sidebar.visible && !this.menu.visible) {
+      if (e.clientY > 900 && !modal && !this.sidebar.visible && !this.menu.visible) {
         this.player.showOSD();
       }
     });

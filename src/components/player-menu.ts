@@ -3,6 +3,7 @@ import { CONFIG } from '../config';
 import { $, html, inShownView, onceTransitionEnd, raw, withInstantScroll } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { AUDIO_ICON, SPEED_ICON, SUBTITLE_ICON } from './icons';
+import type { PlaybackMenuSection } from './player-osd';
 import { t } from '../i18n';
 import {
   PLAYBACK_RATES,
@@ -37,7 +38,7 @@ const OPEN_SPEED = '__speed_open__';
 const PICK_SPEED = '__speed_rate__';
 
 /**
- * The action overlay shown on the right edge during playback. Owns its own
+ * The action menu above the playback bar. Owns its own
  * visibility, auto-hide timer and focus index. Selecting a color item hides the
  * menu and emits the chosen action via `onAction`; the host decides how to
  * route it. When the stream has multiple audio tracks an "Audio Track" row opens
@@ -65,6 +66,7 @@ export class PlayerMenu {
   private isVisible = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private focusIdx = 0;
+  private entry: PlaybackMenuSection = 'main';
   private mode: 'main' | 'audio' | 'subtitles' | 'speed' = 'main';
   private cancelHide: (() => void) | null = null;
   // Registered on the first show; focusIdx stays the model, the scope paints it.
@@ -84,6 +86,7 @@ export class PlayerMenu {
     selectPlaybackRate: (rate: PlaybackRate) => Promise<boolean>,
     subtitleSearchAvailable: () => boolean,
     openSubtitleSearch: () => void,
+    private onVisibilityChanged: (visible: boolean) => void = () => {},
   ) {
     this.getCurrentChannel = getCurrentChannel;
     this.onAction = onAction;
@@ -105,7 +108,7 @@ export class PlayerMenu {
     return this.isVisible;
   }
 
-  show(): void {
+  show(section: PlaybackMenuSection = 'main'): void {
     if (this.isVisible) return;
     if (!this.scope && this.el) {
       const el = this.el;
@@ -120,37 +123,49 @@ export class PlayerMenu {
       });
     }
     this.isVisible = true;
+    this.onVisibilityChanged(true);
     this.cancelHide?.();
     this.cancelHide = null;
-    this.mode = 'main';
+    this.entry = section;
+    this.mode = section;
     this.focusIdx = 0;
     this.render();
     if (this.el) {
+      this.el.closest('.player-osd')?.classList.add('menu-open');
       this.el.classList.remove('hidden');
       this.el.offsetHeight;
       this.el.classList.add('visible');
     }
     if (this.scope) Focus.push(this.scope);
-    this.openAt(0);
+    this.openAt(section === 'subtitles' ? this.subtitleFocusIndex() : 0);
     this.resetTimer();
   }
 
-  hide(): void {
+  hide(immediate = false): void {
+    if (immediate) {
+      this.cancelHide?.();
+      this.cancelHide = null;
+      this.el?.classList.add('hidden');
+    }
     if (!this.isVisible) return;
     this.isVisible = false;
     if (this.scope) Focus.pop(this.scope);
     const el = this.el;
     if (el) {
+      el.closest('.player-osd')?.classList.remove('menu-open');
       el.classList.remove('visible');
-      this.cancelHide = onceTransitionEnd(el, () => {
-        this.cancelHide = null;
-        if (!this.isVisible) el.classList.add('hidden');
-      });
+      if (!immediate) {
+        this.cancelHide = onceTransitionEnd(el, () => {
+          this.cancelHide = null;
+          if (!this.isVisible) el.classList.add('hidden');
+        });
+      }
     }
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    this.onVisibilityChanged(false);
   }
 
   // Re-reads player state, e.g. after a speed change was found not to apply.
@@ -159,6 +174,15 @@ export class PlayerMenu {
     if (this.mode === 'speed') {
       if (this.getPlaybackRateState().available) this.render();
       else this.openMain();
+      return;
+    }
+    if (this.mode === 'subtitles') {
+      const key = this.keyAt(this.focusIdx);
+      this.render();
+      const index = this.rows().findIndex(row => row.dataset.key === key);
+      this.focusIdx = index >= 0 ? index : this.subtitleFocusIndex();
+      this.scope?.track(this.keyAt(this.focusIdx));
+      Focus.flush();
       return;
     }
     if (this.mode !== 'main' || !this.el) return;
@@ -190,11 +214,9 @@ export class PlayerMenu {
   /** Back inside the menu: leave a sub-menu without closing. Returns whether it
    *  was consumed (so the host knows not to hide the menu). */
   handleBack(): boolean {
-    if (this.mode !== 'main') {
-      this.openMain();
-      return true;
-    }
-    return false;
+    if (this.mode === this.entry) return false;
+    this.openMain();
+    return true;
   }
 
   handleAction(action: Action): void {
@@ -238,10 +260,7 @@ export class PlayerMenu {
     }
   }
 
-  // Scroll only the menu's list to a row past its viewport, never the page:
-  // mid slide-in the panel is off-screen, and a scrollIntoView would shift the
-  // whole view. (Magic-Remote wheel scrolling is native — the wheel handler
-  // lets `.menu-items` scroll itself; see key-handler.ts.)
+  // Scroll only the menu list. The Magic Remote wheel also scrolls it natively.
   private revealRow(key: string): boolean | null {
     const list = this.el?.querySelector<HTMLElement>('.menu-items');
     const row = this.rows().find(item => item.dataset.key === key);
@@ -287,7 +306,7 @@ export class PlayerMenu {
     } else if (action === OPEN_SPEED) {
       this.openSpeed();
     } else if (action === BACK) {
-      this.openMain();
+      if (!this.handleBack()) this.hide();
     } else if (action === PICK_AUDIO) {
       const idx = Number(item.dataset.trackIndex);
       if (!Number.isNaN(idx)) this.selectAudioTrack(idx);
@@ -295,7 +314,7 @@ export class PlayerMenu {
     } else if (action === PICK_SUB) {
       const idx = Number(item.dataset.trackIndex);
       if (!Number.isNaN(idx)) this.selectSubtitleTrack(idx);
-      this.openMain();
+      if (!this.handleBack()) this.hide();
     } else if (action === OPEN_SEARCH) {
       this.hide();
       this.openSubtitleSearch();
@@ -327,12 +346,15 @@ export class PlayerMenu {
 
   private openSubtitles(): void {
     this.mode = 'subtitles';
-    const tracks = this.getSubtitleTracks();
-    const active = tracks.findIndex(t => t.active);
-    // Rows: Back (0), Off (1), then tracks. Focus the active track, else Off.
     this.render();
-    this.openAt(active >= 0 ? active + 2 : 1);
+    this.openAt(this.subtitleFocusIndex());
     this.resetTimer();
+  }
+
+  private subtitleFocusIndex(): number {
+    const active = this.getSubtitleTracks().findIndex(track => track.active);
+    // Rows are Back, Off, then the available tracks.
+    return active >= 0 ? active + 2 : 1;
   }
 
   private openSpeed(): void {
@@ -530,6 +552,14 @@ export class PlayerMenu {
       const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-menu-action]');
       if (btn) this.selectItem(btn);
     });
+
+    document.addEventListener('click', (e: MouseEvent) => {
+      const target = e.target;
+      if (!this.isVisible || !el.isConnected || !(target instanceof Element) || el.contains(target)) return;
+      const shortcut = target.closest<HTMLElement>('[data-osd-menu]');
+      this.hide();
+      if (shortcut?.dataset.osdMenu === this.entry) e.stopPropagation();
+    }, true);
 
     // Hover moves focus
     el.addEventListener('nav:hover', (e: Event) => {

@@ -1,11 +1,14 @@
-import type { CatchupInfo, Channel, Programme } from '../types';
+import type { Action, CatchupInfo, Channel, Programme } from '../types';
 import { StorageService } from '../services/storage-service';
-import { $, hide, html, raw, type Safe, show } from '../utils/dom';
+import { $, hide, html, inShownView, raw, type Safe, show } from '../utils/dom';
 import { type DvrState } from '../utils/dvr';
 import { morph } from '../utils/morph';
 import { formatDuration, formatPosition, formatTime, getProgress } from '../utils/time';
 import { t, tp } from '../i18n';
-import { PAUSE_ICON, PLAY_ICON, RESYNC_ICON } from './icons';
+import { ADVANCED_ICON, CHEVRON_DOWN, PAUSE_ICON, PLAY_ICON, RESYNC_ICON, SUBTITLE_ICON } from './icons';
+import { Focus, Tier, type FocusScope, type Via } from '../navigation/focus-scope';
+
+export type PlaybackMenuSection = 'main' | 'subtitles';
 
 export interface PlayerOsdSnapshot {
   playback: {
@@ -48,6 +51,8 @@ export interface PlayerOsdOptions {
   onResync: () => void;
   onPlayNext: () => void;
   onCancelNext: () => void;
+  canSearchSubtitles: () => boolean;
+  onMenu: (section: PlaybackMenuSection | null) => void;
 }
 
 function audioTrackText(name: string): string {
@@ -56,7 +61,10 @@ function audioTrackText(name: string): string {
 }
 
 export class PlayerOsd {
+  private readonly content = document.createElement('div');
   private visible = false;
+  private menuVisible = false;
+  private shortcutScope: FocusScope | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pointerX: number | null = null;
   private pointerY: number | null = null;
@@ -65,6 +73,8 @@ export class PlayerOsd {
   private failedIcons = new Set<string>();
 
   constructor(private container: HTMLElement, private callbacks: PlayerOsdOptions) {
+    // The menu lives above the bar. Its DOM and focus survive bar redraws.
+    $('#player-osd', container)?.appendChild(this.content);
     // Activate OSD controls on click by coordinate hit-test (vs e.target) since
     // they sit over the video plane. The persistent container is marked so the
     // global click handler skips this self-activating subtree.
@@ -78,7 +88,19 @@ export class PlayerOsd {
       if (this.visible) this.resetTimer();
       else if (this.callbacks.canAutoReveal()) this.show();
     });
-    container.addEventListener('click', (e: MouseEvent) => this.onPointerRelease(e.clientX, e.clientY));
+    container.addEventListener('click', (e: MouseEvent) => {
+      if (!(e.target as Element).closest?.('#player-menu')) this.onPointerRelease(e.clientX, e.clientY);
+    });
+    container.addEventListener('nav:hover', (e: Event) => {
+      if (!this.visible || !this.callbacks.canAutoReveal()) return;
+      const section = (e.target as HTMLElement).dataset.osdMenu;
+      if (section === 'main' || section === 'subtitles') this.focusShortcut(section, 'pointer');
+    });
+    container.addEventListener('nav:unhover', (e: Event) => {
+      if ((e.target as HTMLElement).dataset.osdMenu === this.shortcutScope?.focusKey) {
+        this.shortcutScope?.conceal();
+      }
+    });
     // A broken programme icon: record its URL (capture — `error` doesn't bubble)
     // and re-render so morph drops it and never re-requests it.
     container.addEventListener('error', (e: Event) => {
@@ -120,8 +142,79 @@ export class PlayerOsd {
 
   hide(): void {
     this.visible = false;
+    this.closeMenu();
     const osd = $('#player-osd', this.container);
     if (osd) hide(osd);
+    this.releaseShortcuts();
+    this.clearTimer();
+  }
+
+  /** VOD Down and the Info key enter the controls; arrows and OK act only
+   *  on a focused shortcut, leaving ordinary seek and pause keys alone. */
+  handleShortcuts(action: Action, vod: boolean): boolean {
+    if (!this.visible || !this.callbacks.canAutoReveal()) return false;
+    const first = this.firstShortcut();
+    if (!first) return false;
+    const scope = this.shortcutScope;
+    const owner = Focus.owner();
+    if (owner && owner !== Focus.base() && owner !== scope) return false;
+    const key = scope && owner === scope && !scope.concealed ? scope.focusKey : null;
+    if (action === 'yellow' || (action === 'down' && vod && key === null)) {
+      this.clearPointer();
+      this.focusShortcut(first, 'key');
+      return true;
+    }
+    if (key !== 'main' && key !== 'subtitles') return false;
+    switch (action) {
+      case 'left':
+        this.focusShortcut(first, 'key');
+        return true;
+      case 'right':
+        this.focusShortcut('main', 'key');
+        return true;
+      case 'select':
+        this.callbacks.onMenu(key);
+        return true;
+      case 'up':
+      case 'back':
+        this.releaseShortcuts();
+        this.resetTimer();
+        return true;
+      case 'down':
+        this.resetTimer();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private firstShortcut(): PlaybackMenuSection | null {
+    if ($('[data-osd-menu="subtitles"]', this.container)) return 'subtitles';
+    return $('[data-osd-menu="main"]', this.container) ? 'main' : null;
+  }
+
+  private focusShortcut(section: PlaybackMenuSection, via: Via, enter = via === 'key'): void {
+    const osd = $('#player-osd', this.container);
+    if (!osd) return;
+    const scope = this.shortcutScope ??= Focus.register({
+      id: 'player.osd',
+      root: osd,
+      tier: Tier.playbackBar,
+      when: () => this.visible && inShownView(osd),
+      defaultKey: () => this.firstShortcut(),
+    });
+    if (enter && Focus.owner() !== scope) Focus.push(scope);
+    scope.focus(section, via);
+    this.resetTimer();
+  }
+
+  private releaseShortcuts(): void {
+    if (!this.shortcutScope) return;
+    Focus.pop(this.shortcutScope);
+    this.shortcutScope.track(null);
+  }
+
+  private clearTimer(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
   }
@@ -130,20 +223,30 @@ export class PlayerOsd {
     if (this.visible) this.hide(); else this.show();
   }
 
+  closeMenu(): void {
+    if (!this.menuVisible) return;
+    this.menuVisible = false;
+    this.callbacks.onMenu(null);
+  }
+
+  setMenuVisible(visible: boolean): void {
+    this.menuVisible = visible;
+    if (visible) this.show();
+    else if (this.visible) this.resetTimer();
+  }
+
   resetTimer(): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
+    this.clearTimer();
+    if (this.menuVisible) return;
     // Keep the OSD up while paused (live DVR or catch-up): nothing to fall behind.
     if (this.callbacks.getSnapshot().playback?.paused) return;
     this.timer = setTimeout(() => this.hide(), StorageService.getPlayerOsdTimeoutMs());
   }
 
   render(): void {
-    const osd = $('#player-osd', this.container);
-    if (!osd) return;
     const state = this.callbacks.getSnapshot();
     if (state.vodTitle !== null) {
-      this.renderVod(osd, state);
+      this.renderVod(state);
       return;
     }
     if (!state.channel) return;
@@ -239,7 +342,7 @@ export class PlayerOsd {
       `;
     }
 
-    morph(osd, html`
+    morph(this.content, html`
       <div class="osd-channel">
         <div class="osd-channel-number">${state.channelNumber}</div>
         ${state.channel.logo
@@ -247,6 +350,7 @@ export class PlayerOsd {
           : ''}
         <div class="osd-channel-name">${state.channel.name}</div>
         ${this.renderStreamInfo(state.streamInfo)}
+        ${this.renderShortcuts(state)}
       </div>
       ${programmeHtml}
     `);
@@ -255,7 +359,8 @@ export class PlayerOsd {
   updateMessage(message: string): void {
     const osd = $('#player-osd', this.container);
     if (!osd) return;
-    morph(osd, html`<div class="osd-message">${message}</div>`);
+    this.releaseShortcuts();
+    morph(this.content, html`<div class="osd-message">${message}</div>`);
     // Keep the OSD visible so metadata can repaint over this once the stream
     // recovers (else "Reconnecting..." sticks) and it auto-hides otherwise.
     this.visible = true;
@@ -318,9 +423,10 @@ export class PlayerOsd {
 
   // The VOD OSD reuses the Live markup: an `.osd-channel` header (movie/episode
   // title + shared stream-info) over the shared seekable `.osd-progress-row`.
-  private renderVod(osd: HTMLElement, state: PlayerOsdSnapshot): void {
+  private renderVod(state: PlayerOsdSnapshot): void {
     if (state.upNextSeconds > 0) {
-      morph(osd, html`
+      this.releaseShortcuts();
+      morph(this.content, html`
         <div class="osd-next-episode">
           <div class="osd-next-episode-label">${t('player.upNext')}</div>
           <div class="osd-channel-name">${state.vodTitle ?? ''}</div>
@@ -336,10 +442,11 @@ export class PlayerOsd {
     const playback = state.playback;
     const dur = playback && Number.isFinite(playback.duration) ? playback.duration : 0;
     const pos = playback ? Math.min(playback.position, dur || Infinity) : 0;
-    morph(osd, html`
+    morph(this.content, html`
       <div class="osd-channel">
         <div class="osd-channel-name">${state.vodTitle ?? ''}</div>
         ${this.renderStreamInfo(state.streamInfo)}
+        ${this.renderShortcuts(state)}
       </div>
       <div class="osd-progress-row">
         ${this.playPauseButton(playback?.paused ?? false)}
@@ -351,6 +458,26 @@ export class PlayerOsd {
         ${this.resyncButton()}
       </div>
     `);
+  }
+
+  private renderShortcuts(state: PlayerOsdSnapshot): Safe {
+    const subtitles = !!state.streamInfo?.subtitle || this.callbacks.canSearchSubtitles();
+    if (!subtitles && this.shortcutScope?.focusKey === 'subtitles') this.shortcutScope.track('main');
+    return html`
+      <div class="osd-shortcuts" data-nav-container>
+        ${state.vodTitle !== null ? html`
+          <span class="osd-shortcut-hint">${raw(CHEVRON_DOWN)}</span>` : ''}
+        ${subtitles ? html`
+          <button type="button" class="osd-shortcut" data-focusable
+                  data-key="subtitles" data-osd-menu="subtitles" aria-haspopup="true">
+            ${raw(SUBTITLE_ICON)}<span>${t('player.subtitles')}</span>
+          </button>` : ''}
+        <button type="button" class="osd-shortcut osd-shortcut-menu" data-focusable
+                data-key="main" data-osd-menu="main" aria-haspopup="true">
+          ${raw(ADVANCED_ICON)}<span>${t('player.menu')}</span>
+        </button>
+      </div>
+    `;
   }
 
   /** The programme icon `<img>`, or nothing if it has no URL or that URL already
@@ -429,11 +556,21 @@ export class PlayerOsd {
    *  Go-to-Live, or resync control under it. Coordinates are used because the OSD
    *  controls sit over the video plane. */
   private onPointerRelease(x: number, y: number): void {
+    if (!this.visible) return;
     const state = this.callbacks.getSnapshot();
     if (state.upNextSeconds > 0) {
       if (this.hitsControl('[data-next-play]', x, y)) this.callbacks.onPlayNext();
       else if (this.hitsControl('[data-next-cancel]', x, y)) this.callbacks.onCancelNext();
       return;
+    }
+    if (this.callbacks.canAutoReveal()) {
+      const section = this.hitsControl('[data-osd-menu="subtitles"]', x, y) ? 'subtitles'
+        : this.hitsControl('[data-osd-menu="main"]', x, y) ? 'main' : null;
+      if (section) {
+        this.focusShortcut(section, 'pointer', true);
+        this.callbacks.onMenu(section);
+        return;
+      }
     }
     if (this.seekAtPointer(x, y)) return;
     if (this.hitsControl('[data-playpause]', x, y)) this.callbacks.onPauseToggle();

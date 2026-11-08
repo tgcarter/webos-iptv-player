@@ -42,16 +42,19 @@ async function seedCollections(page: Page, count = 30): Promise<void> {
 const layer = (page: Page, section = 'movies') =>
   page.locator(`#view-${section} .catalog-layer-grid`);
 
+async function openCollection(page: Page, section: string, kind: string, manage = false): Promise<void> {
+  const grid = layer(page, section);
+  await grid.locator(`.catalog-sidebar [data-collection-see-all="${kind}"]`).click();
+  if (manage) await grid.locator('[data-collection-action="manage"]').click();
+}
+
 for (const section of ['movies', 'series'] as const) {
   for (const collection of ['continue', 'watchlist'] as const) {
-    test(`${section} ${collection}: counted preview, independent removal, and remote navigation`, async ({ page }) => {
+    test(`${section} ${collection}: counted collection, independent removal, and remote navigation`, async ({ page }) => {
       await seedCollections(page);
       await page.goto('/');
       await enterTab(page, section);
-      const rail = page.locator(`#view-${section} [data-rail-key="${collection}"]`);
-      await expect(rail.locator('.catalog-tile:not(.catalog-see-all)')).toHaveCount(20);
-      await expect(rail.locator('.catalog-see-all-count')).toContainText('30');
-      await rail.locator('[data-collection-see-all]').click();
+      await openCollection(page, section, collection);
       const grid = layer(page, section);
       await expect(grid.locator('.catalog-grid-title')).toContainText('30');
       if (section === 'series' && collection === 'continue') {
@@ -78,14 +81,15 @@ for (const section of ['movies', 'series'] as const) {
       await expect(removes).toHaveCount(0);
       await expect(grid.locator('[data-collection-action="manage"]')).toHaveClass(/focused/);
       await page.keyboard.press('Escape');
-      await expect(rail.locator('[data-collection-manage]')).toBeVisible();
+      await expect(grid.locator('[data-key="filter:all"]')).toHaveAttribute('aria-current', 'true');
       const store = collection === 'continue' ? 'playback-progress' : 'watchlist';
       const kind = section === 'movies' ? 'vod' : collection === 'continue' ? 'episode' : 'series';
       await expect.poll(async () => (await readUserDataStore<ResumeEntry | WatchlistEntry>(page, store))
         .filter(row => row.value.accountId === 'x1' && row.value.kind === kind).length).toBe(28);
       await page.reload();
       await enterTab(page, section);
-      await expect(rail.locator('.catalog-see-all-count')).toContainText('28');
+      await openCollection(page, section, collection);
+      await expect(grid.locator('.catalog-grid-count')).toContainText('28');
     });
   }
 }
@@ -94,7 +98,7 @@ test('clears only the visible account and kind, preserves the other collection, 
   await seedCollections(page);
   await page.goto('/');
   await enterTab(page, 'movies');
-  await page.locator('#view-movies [data-collection-manage="watchlist"]').click();
+  await openCollection(page, 'movies', 'watchlist', true);
   const grid = layer(page);
   await grid.locator('[data-collection-action="clear"]').click();
   const prompt = page.locator('.confirmation-prompt:not(.hidden)');
@@ -109,7 +113,8 @@ test('clears only the visible account and kind, preserves the other collection, 
   await expect(grid.locator('[data-collection-action="clear"]')).toHaveClass(/focused/);
   await grid.locator('[data-collection-action="clear"]').click();
   await prompt.locator('[data-confirm-action="confirm"]').click();
-  await expect(page.locator('#view-movies [data-rail-key="watchlist"]')).toHaveCount(0);
+  await openCollection(page, 'movies', 'watchlist');
+  await expect(grid.locator('.catalog-grid')).toContainText('Your Watchlist is empty.');
   await expect.poll(async () => {
     const rows = await readUserDataStore<WatchlistEntry>(page, 'watchlist');
     return rows.filter(row => row.value.accountId === 'x1' && row.value.kind === 'vod').length;
@@ -118,7 +123,8 @@ test('clears only the visible account and kind, preserves the other collection, 
   expect(rows.filter(row => row.value.accountId === 'x1' && row.value.kind === 'series')).toHaveLength(30);
   expect(rows.filter(row => row.value.accountId === 'x2')).toHaveLength(2);
   expect(await readUserDataStore(page, 'playback-progress')).toHaveLength(62);
-  await expect(page.locator('#view-movies [data-rail-key="continue"] .catalog-tile')).toHaveCount(21);
+  await openCollection(page, 'movies', 'continue');
+  await expect(grid.locator('.catalog-grid-count')).toHaveText('30 movies');
 });
 
 for (const section of ['movies', 'series'] as const) {
@@ -126,7 +132,7 @@ for (const section of ['movies', 'series'] as const) {
     await seedCollections(page);
     await page.goto('/');
     await enterTab(page, section);
-    await page.locator(`#view-${section} [data-rail-key="continue"] [data-collection-see-all]`).click();
+    await openCollection(page, section, 'continue');
     const grid = layer(page, section);
     const tile = grid.locator('.catalog-tile').nth(1);
     const key = await tile.getAttribute('data-key');
@@ -144,29 +150,29 @@ for (const section of ['movies', 'series'] as const) {
   });
 }
 
-test('returns to a neighboring browse episode after completing direct playback', async ({ page }) => {
+test('returns to a neighboring episode after completing direct playback', async ({ page }) => {
   await seedCollections(page, 4);
   await page.goto('/');
   await enterTab(page, 'series');
-  const rail = page.locator('#view-series [data-rail-key="continue"]');
-  await rail.locator('[data-resume-episode="episode2"]').click();
+  await openCollection(page, 'series', 'continue');
+  const grid = layer(page, 'series');
+  await grid.locator('[data-resume-episode="episode2"]').click();
   await expect(page.locator('#view-player')).toBeVisible();
   await page.locator('#video-player').evaluate(video => {
     Object.defineProperty(video, 'duration', { configurable: true, get: () => 600 });
     Object.defineProperty(video, 'currentTime', { configurable: true, get: () => 599 });
   });
   await page.keyboard.press('Escape');
-  await expect(rail.locator('[data-resume-episode="episode2"]')).toHaveCount(0);
-  await expect(rail.locator('.focused')).toHaveAttribute('data-key', 'r:episode3');
+  await expect(grid.locator('[data-resume-episode="episode2"]')).toHaveCount(0);
+  await expect(grid.locator('.focused')).toHaveAttribute('data-key', 'r:episode3');
 });
 
 for (const collection of ['continue', 'watchlist'] as const) {
-  test(`leaves an emptied ${collection} grid after removing its final movie from detail`, async ({ page }) => {
+  test(`shows an empty ${collection} grid after removing its final movie from detail`, async ({ page }) => {
     await seedCollections(page, 1);
     await page.goto('/');
     await enterTab(page, 'movies');
-    await page.locator(`#view-movies [data-collection-manage="${collection}"]`).click();
-    await page.keyboard.press('Escape');
+    await openCollection(page, 'movies', collection);
     const grid = layer(page);
     await grid.locator('.catalog-tile').click();
     const action = page.locator(`#view-movies [data-action="${collection === 'continue' ? 'remove-resume' : 'watchlist'}"]`);
@@ -174,19 +180,18 @@ for (const collection of ['continue', 'watchlist'] as const) {
     if (collection === 'continue') await expect(action).toHaveCount(0);
     else await expect(action).toContainText('Add to Watchlist');
     await page.keyboard.press('Escape');
-    await expect(grid).toBeEmpty();
-    await expect(page.locator(`#view-movies [data-rail-key="${collection}"]`)).toHaveCount(0);
-    await expect(page.locator('#view-movies .catalog-layer-browse .focused')).toHaveCount(1);
-    await page.keyboard.press('ArrowRight');
-    await expect(page.locator('#view-movies .catalog-layer-browse .focused')).toHaveCount(1);
+    await expect(grid.locator('.catalog-grid .catalog-tile')).toHaveCount(0);
+    await expect(grid.locator(`[data-key="filter:${collection}"]`)).toHaveAttribute('aria-current', 'true');
+    await page.keyboard.press('Escape');
+    await expect(grid.locator('[data-key="filter:all"]')).toHaveAttribute('aria-current', 'true');
   });
 }
 
-test('leaves an emptied collection after completing its final episode', async ({ page }) => {
+test('shows an empty collection after completing its final episode', async ({ page }) => {
   await seedCollections(page, 1);
   await page.goto('/');
   await enterTab(page, 'series');
-  await page.locator('#view-series [data-collection-manage="continue"]').click();
+  await openCollection(page, 'series', 'continue', true);
   await page.keyboard.press('Escape');
   const grid = layer(page, 'series');
   await grid.locator('.catalog-tile').click();
@@ -196,9 +201,8 @@ test('leaves an emptied collection after completing its final episode', async ({
     Object.defineProperty(video, 'currentTime', { configurable: true, get: () => 599 });
   });
   await page.keyboard.press('Escape');
-  await expect(grid).toBeEmpty();
-  await expect(page.locator('#view-series [data-rail-key="continue"]')).toHaveCount(0);
-  await expect(page.locator('#view-series .catalog-layer-browse .focused')).toHaveCount(1);
+  await expect(grid.locator('.catalog-grid')).toContainText('No titles to continue.');
+  await expect(grid.locator('[data-key="filter:continue"]')).toHaveClass(/focused/);
 });
 
 test('refreshes concealed collection counts when the unlock session expires without moving Settings focus', async ({ page }) => {
@@ -245,12 +249,12 @@ test('keeps one ring through virtualized deletion, tab-bar handoff, and manageme
   await seedCollections(page, 200);
   await page.goto('/');
   await enterTab(page, 'movies');
-  await page.locator('#view-movies [data-collection-manage="watchlist"]').click();
+  await openCollection(page, 'movies', 'watchlist', true);
   const grid = layer(page);
   await grid.locator('[data-collection-action="remove"]').first().hover();
-  for (let i = 0; i < 32; i++) await page.keyboard.press('ArrowDown');
-  await expect(grid.locator('.catalog-remove-mark.focused')).toHaveAttribute('data-key', 'w:vod196');
-  for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
+  for (let i = 0; i < 39; i++) await page.keyboard.press('ArrowDown');
+  await expect(grid.locator('.catalog-remove-mark.focused')).toHaveAttribute('data-key', 'w:vod195');
+  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight');
   await expect(grid.locator('.catalog-remove-mark.focused')).toHaveAttribute('data-key', 'w:vod199');
   expect(await grid.locator('.catalog-remove-mark').count()).toBeLessThan(50);
   await page.keyboard.press('Enter');
@@ -268,7 +272,7 @@ test('leaves a managed collection where each spaced wheel step stops it', async 
   await seedCollections(page, 35);
   await page.goto('/');
   await enterTab(page, 'series');
-  await page.locator('#view-series [data-collection-manage="continue"]').click();
+  await openCollection(page, 'series', 'continue', true);
   const grid = layer(page, 'series');
   const view = grid.locator('.catalog-grid.catalog-managing');
   await expect(view).toBeVisible();
@@ -292,7 +296,7 @@ test('leaves a managed collection where each spaced wheel step stops it', async 
   const scrollTop = () => view.evaluate(el => el.scrollTop);
   const max = await view.evaluate(el => el.scrollHeight - el.clientHeight);
   let expected = 0;
-  for (const step of [80, 80, 80, 80, -80, 80, -80, -80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80]) {
+  for (const step of [80, 80, 80, 80, -80, 80, -80, -80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, 80, max]) {
     expected = Math.max(0, Math.min(max, expected + step));
     await page.mouse.wheel(0, step);
     await expect.poll(scrollTop).toBe(expected);
@@ -309,7 +313,7 @@ test('rejects a full Watchlist without replacing saved titles and shows an actio
   await seedCollections(page, 200);
   await page.goto('/');
   await enterTab(page, 'movies');
-  await page.locator('#view-movies [data-rail-key="cat:1"] .catalog-tile').first().click();
+  await page.locator('#view-movies .catalog-grid .catalog-tile').first().click();
   await page.locator('#view-movies [data-action="watchlist"]').click();
   await expect(page.locator('.toast').filter({ hasText: 'Watchlist is full' })).toBeVisible();
   await expect(page.locator('#view-movies [data-action="watchlist"]')).toContainText('Add to Watchlist');
@@ -319,25 +323,21 @@ test('rejects a full Watchlist without replacing saved titles and shows an actio
   expect(rows.some(row => row.value.itemId === '10')).toBe(false);
 });
 
-test('offers management for a single title and returns to browse after its removal', async ({ page }) => {
+test('offers management for a single title and returns to All after its removal', async ({ page }) => {
   await seedCollections(page, 1);
   await page.goto('/');
   await enterTab(page, 'series');
-  const rail = page.locator('#view-series [data-rail-key="continue"]');
-  await expect(rail.locator('.catalog-see-all')).toHaveCount(0);
-  await rail.locator('[data-collection-manage]').click();
-  await layer(page, 'series').locator('[data-collection-action="remove"]').click();
-  await expect(rail).toHaveCount(0);
-  await expect(page.locator('#view-series .catalog-layer-browse')).toBeVisible();
-  await page.keyboard.press('ArrowRight');
-  await expect(page.locator('#view-series .catalog-layer-browse .focused')).toHaveCount(1);
+  await openCollection(page, 'series', 'continue', true);
+  const grid = layer(page, 'series');
+  await grid.locator('[data-collection-action="remove"]').click();
+  await expect(grid.locator('[data-key="filter:all"]')).toHaveAttribute('aria-current', 'true');
 });
 
 test('keeps the independent red-and-white remove icon aligned in every theme and text size', async ({ page }, testInfo) => {
   await seedCollections(page);
   await page.goto('/?pseudo=1');
   await enterTab(page, 'movies');
-  await page.locator('#view-movies [data-collection-manage="continue"]').click();
+  await openCollection(page, 'movies', 'continue', true);
   const grid = layer(page);
   await expect(page.locator('.toast.visible')).toHaveCount(0);
   for (const theme of THEMES) {
@@ -355,7 +355,7 @@ test('keeps the independent red-and-white remove icon aligned in every theme and
         const range = document.createRange();
         range.selectNodeContents(label);
         const posters = button.closest('.catalog-grid')!.querySelectorAll('.catalog-grid-cell');
-        const posterRight = posters[6].getBoundingClientRect().right;
+        const posterRight = posters[4].getBoundingClientRect().right;
         return {
           width: rect.width, height: rect.height,
           fill: getComputedStyle(button.querySelector('circle')!).fill,
